@@ -29,6 +29,9 @@ Each mode has a light and a dark version. There's an animated cat mascot that bl
 | **Injection scan** | Fetched pages, tool and MCP results, and uploaded documents are checked for prompt-injection patterns and hidden characters. Flagged content is marked in the UI, and the model is told to treat it as untrusted data |
 | **Governance** | Roles (admin, team lead, user), workspaces with model allowlists (`claude-*`, `gpt-4o*`…), chat retention in days, and their own guard policies. Audit log of sign-ins, guard decisions, admin and settings changes, filterable and exportable to CSV. User management: create, disable, reset password, delete |
 | **Local-only mode** | `NEKO_LOCAL_ONLY=true` only allows providers and MCP servers on this machine or your LAN (for example Ollama) and turns web tools off, so nothing leaves your network |
+| **Memory** | Short facts carried across chats (Settings → Memory): add, edit, delete, or turn off. Optionally let the AI save memories with a `remember` tool. Secrets are stripped before anything is saved |
+| **My files (RAG)** | Upload PDFs, notes and code to a personal library. They're chunked and indexed with SQLite FTS5 (BM25 + stemming), fully offline with no embedding API. Turn on "Search my files" and the AI retrieves relevant passages, with secrets redacted before they're sent |
+| **Export** | Any chat as Markdown, JSON or PDF (via the browser's print dialog), plus "Download all my data" as one JSON file |
 | **Privacy** | No telemetry, no CDNs, no external fonts. API keys are encrypted at rest (ChaCha20-Poly1305) and never sent back to the browser |
 
 ## Quick start
@@ -95,7 +98,9 @@ cd crates/web && trunk serve                            # UI with hot reload on 
 crates/
   shared/   types shared by server & web, SSE parser
   server/   Axum API, SQLite (FTS5 search), auth, provider adapters, streaming,
-            tool loop (chat.rs), web tools + MCP client (tools/), uploads
+            tool loop (chat.rs), web tools + MCP client (tools/), uploads,
+            guard (secret/PII/injection), admin (roles, audit, retention),
+            library (memory, knowledge base, export)
   web/      Leptos UI, themes (style/main.css), mascot, PWA assets,
             vendor/ (preview-only libraries, see vendor/README.md)
 ```
@@ -107,4 +112,4 @@ crates/
 3. ✅ Tools: MCP client, web search and URL fetch toggles, PDF and image uploads
 4. ✅ Canvas: HTML, SVG, Mermaid and React previews in a side panel
 5. ✅ Security: PII and secret detection before sending, prompt-injection scanning, audit logs, team roles, model allowlists, retention policies
-6. Extras: export to Markdown/PDF/JSON, memory across chats, RAG over your files
+6. ✅ Extras: export to Markdown/PDF/JSON, memory across chats, RAG over your files

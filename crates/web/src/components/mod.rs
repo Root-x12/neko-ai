@@ -2,6 +2,7 @@ pub mod admin;
 pub mod canvas;
 pub mod chat;
 pub mod guard;
+pub mod library;
 pub mod login;
 pub mod mascot;
 pub mod params;

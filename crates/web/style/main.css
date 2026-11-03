@@ -292,6 +292,8 @@ input[type="range"] { width: 100%; }
 /* ---------- chat ---------- */
 .chat { display: flex; flex-direction: column; min-width: 0; min-height: 0; position: relative; }
 .topbar {
+  /* Its blur makes a stacking context; keep it (and its menus) above the message list. */
+  position: relative; z-index: 20;
   display: flex; align-items: center; gap: 10px; height: 58px; flex: none;
   padding: 0 16px; padding-top: env(safe-area-inset-top);
   border-bottom: 1px solid var(--border);
@@ -684,6 +686,51 @@ input[type="range"] { width: 100%; }
   .policy-grid { grid-template-columns: minmax(0, 1fr); }
   .audit-row { grid-template-columns: minmax(0, 1fr); gap: 2px; }
   .dialog { padding: 20px 18px; }
+}
+
+/* ---------- memory & files ---------- */
+.memory-list, .doc-list { display: flex; flex-direction: column; gap: 6px; margin: 12px 0; }
+.memory-row, .doc-row { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: var(--radius-sm); background: var(--surface-2); border: 1px solid var(--border); }
+.memory-row > .icon, .doc-row > .icon { color: var(--accent); }
+.memory-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.memory-edit { flex: 1; min-width: 0; }
+.doc-info { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.doc-info strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dropzone {
+  display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 22px; margin-top: 12px; cursor: pointer;
+  border: 2px dashed var(--border); border-radius: var(--radius); color: var(--accent); text-align: center; transition: border-color .2s, background .2s;
+}
+.dropzone:hover { border-color: var(--accent); background: var(--accent-soft); }
+.dropzone span:not(.muted) { color: var(--text); font-weight: 600; }
+.hit-list { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.hit { padding: 10px 12px; border-left: 3px solid var(--accent); background: var(--surface-2); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
+.hit p { margin: 4px 0 0; font-size: 14px; }
+.inline-form input { flex: 1; min-width: 0; }
+.popover.down { bottom: auto; top: calc(100% + 8px); left: auto; right: 0; }
+.menu-item { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 8px; border: none; border-radius: 6px; background: transparent; text-align: left; font-size: 14px; }
+.menu-item:hover { background: var(--accent-soft); color: var(--accent); }
+.menu-item .icon { color: var(--accent); }
+a.btn { text-decoration: none; color: var(--text); }
+
+/* ---------- print (PDF export) ---------- */
+#print-root { display: none; }
+@media print {
+  html.printing body { overflow: visible; background: #fff !important; color: #111 !important; }
+  html.printing body > *:not(#print-root) { display: none !important; }
+  html.printing #print-root { display: block; font-family: "Segoe UI", system-ui, sans-serif; color: #111; }
+  .print-head { border-bottom: 2px solid #f27aa5; margin-bottom: 18px; }
+  .print-head h1 { margin: 0 0 4px; font-size: 22px; }
+  .print-head p { margin: 0 0 10px; color: #666; font-size: 12px; }
+  .print-msg { margin: 0 0 16px; break-inside: avoid-page; }
+  .print-who { font-weight: 700; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: #c2407a; margin-bottom: 4px; }
+  .print-msg.user .md { background: #fbeff4; padding: 8px 12px; border-radius: 8px; }
+  #print-root .md { font-size: 13px; line-height: 1.55; color: #111; }
+  #print-root .code-block { background: #f6f6f8 !important; border: 1px solid #ddd; box-shadow: none !important; }
+  #print-root .code-block code { color: #222 !important; white-space: pre-wrap; }
+  #print-root .code-head { color: #666; background: #eee; }
+  #print-root .copy-btn { display: none; }
+  #print-root a { color: #c2407a; }
+  @page { margin: 16mm; }
 }
 
 /* ==========================================================================

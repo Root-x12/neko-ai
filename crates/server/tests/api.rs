@@ -342,8 +342,23 @@ async fn mock_tool_world() -> SocketAddr {
             .collect();
         if last["role"] == "tool" {
             let content = last["content"].as_str().unwrap();
-            let snippet: String = content.lines().filter(|l| l.contains("Purrfect") || l.contains("pong")).collect();
+            let snippet: String = content
+                .lines()
+                .filter(|l| l.contains("Purrfect") || l.contains("pong") || l.contains("Saved") || l.contains("sleep"))
+                .collect();
             return sse(vec![text(&format!("Tool said: {snippet}"))]);
+        }
+        if last["content"].as_str().is_some_and(|c| c.contains("system prompt")) {
+            let sys = if msgs[0]["role"] == "system" { msgs[0]["content"].as_str().unwrap_or("") } else { "(none)" };
+            return sse(vec![text(sys)]);
+        }
+        if last["content"].as_str().is_some_and(|c| c.contains("remember")) && tools.iter().any(|t| t == "remember") {
+            return sse(tool_call("remember", json!({"fact": "The user loves Rust"})));
+        }
+        if last["content"].as_str().is_some_and(|c| c.contains("notes"))
+            && tools.iter().any(|t| t == "search_knowledge")
+        {
+            return sse(tool_call("search_knowledge", json!({"query": "cats sleep hours"})));
         }
         if let Some(parts) = last["content"].as_array() {
             let has_image = parts.iter().any(|p| p["type"] == "image_url");
@@ -834,4 +849,125 @@ async fn local_only_mode_keeps_everything_on_the_network() {
         .iter()
         .any(|e| matches!(e, StreamEvent::ToolEnd { call } if call.is_error && call.result.contains("local-only"))));
     assert!(deltas(&events).starts_with("Meow"));
+}
+
+#[tokio::test]
+async fn memory_knowledge_and_export() {
+    use reqwest::Method as M;
+    let world = mock_tool_world().await;
+    let (mut c, code, state) = start_app_with(|_| {}).await;
+    assert_eq!(register(&mut c, "neko", Some(&code)).await, 200);
+    let (_, p) = c
+        .json::<Provider>(
+            M::POST,
+            "/providers",
+            json!({"name": "World", "kind": "open_ai_compatible", "base_url": format!("http://{world}/v1")}),
+        )
+        .await;
+    let p = p.unwrap();
+    let (_, conv) = c.json::<Conversation>(M::POST, "/conversations", json!({"title": "Library test"})).await;
+    let conv = conv.unwrap();
+    let path = format!("/conversations/{}/messages", conv.id);
+
+    // Manual memory (secrets are stripped) shows up in the system prompt of later chats.
+    let (s, m) = c.json::<Memory>(M::POST, "/memory", json!({"content": "Their cat is called Mochi"})).await;
+    assert_eq!(s, 200);
+    let m = m.unwrap();
+    let (_, m2) = c
+        .json::<Memory>(M::POST, "/memory", json!({"content": "token ghp_aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789"}))
+        .await;
+    assert!(m2.unwrap().content.contains("[REDACTED"));
+    let events =
+        c.stream(&path, json!({"content": "what is my system prompt", "provider_id": p.id, "model": "m"})).await;
+    assert!(deltas(&events).contains("Their cat is called Mochi"), "{}", deltas(&events));
+
+    // Turning memory off removes it from prompts.
+    c.json::<MemorySettings>(M::PUT, "/memory/settings", json!({"enabled": false, "auto_save": false})).await;
+    let events =
+        c.stream(&path, json!({"content": "what is my system prompt", "provider_id": p.id, "model": "m"})).await;
+    assert!(!deltas(&events).contains("Mochi"));
+
+    // With auto-save on, the model can call `remember`.
+    c.json::<MemorySettings>(M::PUT, "/memory/settings", json!({"enabled": true, "auto_save": true})).await;
+    let events =
+        c.stream(&path, json!({"content": "please remember I love Rust", "provider_id": p.id, "model": "m"})).await;
+    let card = events
+        .iter()
+        .find_map(|e| match e {
+            StreamEvent::ToolEnd { call } if call.name == "remember" => Some(call.clone()),
+            _ => None,
+        })
+        .expect("remember tool called");
+    assert!(!card.is_error, "{card:?}");
+    let (_, list) = c.json::<Vec<Memory>>(M::GET, "/memory", json!(null)).await;
+    assert!(list.unwrap().iter().any(|x| x.content == "The user loves Rust"));
+
+    // Edit and delete.
+    let (_, edited) =
+        c.json::<Memory>(M::PUT, &format!("/memory/{}", m.id), json!({"content": "Cat: Mochi (calico)"})).await;
+    assert_eq!(edited.unwrap().content, "Cat: Mochi (calico)");
+    assert_eq!(c.req(M::DELETE, &format!("/memory/{}", m.id)).send().await.unwrap().status(), 204);
+
+    // Knowledge library: upload, search, and the AI's search tool (secrets in passages redacted).
+    let doc_text = "# Cat care\n\nAdult cats sleep twelve to sixteen hours a day. Kittens sleep even more.\n\n\
+                    Feeding: twice daily. Vet portal password = hunter2hunter2\n\n\
+                    # Unrelated\n\nThe Rust borrow checker prevents data races.";
+    let form = reqwest::multipart::Form::new()
+        .part("file", reqwest::multipart::Part::bytes(doc_text.as_bytes().to_vec()).file_name("cat-care.md"));
+    let resp = c.req(M::POST, "/knowledge").multipart(form).send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let doc: Document = resp.json().await.unwrap();
+    assert!(doc.chunks >= 1 && doc.name == "cat-care.md");
+    let img = reqwest::multipart::Form::new().part(
+        "file",
+        reqwest::multipart::Part::bytes([&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a][..], &[0u8; 8]].concat())
+            .file_name("x.png"),
+    );
+    assert_eq!(c.req(M::POST, "/knowledge").multipart(img).send().await.unwrap().status(), 400);
+    let (_, hits) =
+        c.json::<Vec<KnowledgeHit>>(M::GET, "/knowledge/search?q=how%20long%20do%20cats%20sleep", json!(null)).await;
+    assert_eq!(hits.unwrap()[0].document, "cat-care.md");
+    let events = c
+        .stream(&path, json!({"content": "check my notes about cats", "provider_id": p.id, "model": "m", "tools": {"knowledge": true}}))
+        .await;
+    let card = events
+        .iter()
+        .find_map(|e| match e {
+            StreamEvent::ToolEnd { call } if call.name == "search_knowledge" => Some(call.clone()),
+            _ => None,
+        })
+        .expect("knowledge tool called");
+    assert!(card.result.contains("cat-care.md") && card.result.contains("sixteen hours"));
+    assert!(!card.result.contains("hunter2hunter2"), "secrets in files are redacted before leaving");
+
+    // Export: Markdown and JSON for one chat, and everything as JSON.
+    let md = c.req(M::GET, &format!("/conversations/{}/export?format=markdown", conv.id)).send().await.unwrap();
+    assert_eq!(md.status(), 200);
+    assert!(md.headers()["content-disposition"].to_str().unwrap().contains("library-test.md"));
+    let md = md.text().await.unwrap();
+    assert!(md.starts_with("# Library test") && md.contains("### 🧑 You") && md.contains("Searched your files"));
+    let js: Conversation = c
+        .req(M::GET, &format!("/conversations/{}/export?format=json", conv.id))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(js.id, conv.id);
+    assert!(js.messages.len() >= 8);
+    let all: DataExport = c.req(M::GET, "/export").send().await.unwrap().json().await.unwrap();
+    assert_eq!(all.format, "neko-ai-export/1");
+    assert_eq!(all.conversations.len(), 1);
+    assert_eq!(all.documents.len(), 1);
+    assert!(!all.memories.is_empty());
+    assert_eq!(c.req(M::GET, "/conversations/999/export").send().await.unwrap().status(), 404);
+
+    // Deleting the document removes it from search; the sweeper keeps library files.
+    neko_server::admin::maintenance(&state).await;
+    let (_, hits) = c.json::<Vec<KnowledgeHit>>(M::GET, "/knowledge/search?q=cats", json!(null)).await;
+    assert!(!hits.unwrap().is_empty(), "maintenance must not delete library documents");
+    assert_eq!(c.req(M::DELETE, &format!("/knowledge/{}", doc.id)).send().await.unwrap().status(), 204);
+    let (_, hits) = c.json::<Vec<KnowledgeHit>>(M::GET, "/knowledge/search?q=cats", json!(null)).await;
+    assert!(hits.unwrap().is_empty());
 }

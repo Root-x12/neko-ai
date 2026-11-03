@@ -328,6 +328,9 @@ pub struct ToolSelection {
     pub fetch_url: bool,
     #[serde(default)]
     pub mcp_servers: Vec<i64>,
+    /// Search the user's knowledge library.
+    #[serde(default)]
+    pub knowledge: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -718,4 +721,66 @@ pub struct McpToolInfo {
 pub struct McpTestResult {
     pub server_name: String,
     pub tools: Vec<McpToolInfo>,
+}
+
+// ---------- memory, knowledge, export ----------
+
+/// Something the assistant should remember about the user across chats.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Memory {
+    pub id: i64,
+    pub content: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryInput {
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct MemorySettings {
+    /// Include saved memories in every chat.
+    pub enabled: bool,
+    /// Let the AI save new memories itself (needs a model with tool support).
+    pub auto_save: bool,
+}
+
+impl Default for MemorySettings {
+    fn default() -> Self {
+        Self { enabled: true, auto_save: false }
+    }
+}
+
+/// A file in the user's knowledge library, searchable by the AI.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Document {
+    pub id: i64,
+    pub name: String,
+    pub mime: String,
+    pub size: i64,
+    pub chunks: i64,
+    #[serde(default)]
+    pub flags: Vec<String>,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct KnowledgeHit {
+    pub document_id: i64,
+    pub document: String,
+    pub chunk: i64,
+    pub text: String,
+}
+
+/// Everything a user owns, for `GET /api/export`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataExport {
+    pub format: String,
+    pub exported_at: i64,
+    pub user: User,
+    pub conversations: Vec<Conversation>,
+    pub memories: Vec<Memory>,
+    pub documents: Vec<Document>,
 }

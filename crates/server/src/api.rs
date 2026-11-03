@@ -49,6 +49,7 @@ pub fn routes() -> Router<AppState> {
         .route("/devices/{id}", delete(revoke_device))
         .route("/devices/revoke-others", post(revoke_other_devices))
         .merge(crate::admin::routes())
+        .merge(crate::library::routes())
         .fallback(|| async { AppError::not_found("API route") })
 }
 

@@ -10,6 +10,7 @@ pub mod db;
 pub mod devices;
 pub mod error;
 pub mod guard;
+pub mod library;
 pub mod llm;
 pub mod tools;
 pub mod uploads;

@@ -126,6 +126,7 @@ fn TopBar() -> impl IntoView {
                 {title}
             </h2>
             <div class="topbar-actions">
+                <crate::components::library::ExportMenu />
                 <ThemeToggles />
                 <button
                     class="icon-btn"
@@ -344,12 +345,16 @@ fn ToolCard(call: ToolCall) -> impl IntoView {
     let headline = match call.name.as_str() {
         "web_search" => args["query"].as_str().map(|q| format!("“{q}”")),
         "fetch_url" => args["url"].as_str().map(str::to_string),
+        "remember" => args["fact"].as_str().map(|f| format!("“{f}”")),
+        "search_knowledge" => args["query"].as_str().map(|q| format!("“{q}”")),
         _ => args.as_object().and_then(|o| o.values().find_map(|v| v.as_str().map(|s| s.to_string()))),
     }
     .unwrap_or_default();
     let icon = match call.name.as_str() {
         "web_search" => icons::SEARCH,
         "fetch_url" => icons::GLOBE,
+        "remember" => icons::BRAIN,
+        "search_knowledge" => icons::BOOK,
         _ => icons::WRENCH,
     };
     let status = if !call.done {
@@ -504,7 +509,9 @@ fn ModelPicker() -> impl IntoView {
 fn ToolsMenu() -> impl IntoView {
     let ctx = expect_context::<Ctx>();
     let open = RwSignal::new(false);
-    let count = move || ctx.tools.with(|t| t.web_search as usize + t.fetch_url as usize + t.mcp_servers.len());
+    let count = move || {
+        ctx.tools.with(|t| t.web_search as usize + t.fetch_url as usize + t.knowledge as usize + t.mcp_servers.len())
+    };
     let servers = move || ctx.mcp_servers.get().into_iter().filter(|m| m.enabled).collect::<Vec<_>>();
     view! {
         <div class="tools-menu">
@@ -549,6 +556,18 @@ fn ToolsMenu() -> impl IntoView {
                         />
                         <Icon svg=icons::GLOBE size=15 />
                         "Read web pages"
+                    </label>
+                    <label class="check">
+                        <input
+                            type="checkbox"
+                            prop:checked=move || ctx.tools.with(|t| t.knowledge)
+                            on:change=move |ev| {
+                                let on = event_target_checked(&ev);
+                                ctx.set_tools(|t| t.knowledge = on);
+                            }
+                        />
+                        <Icon svg=icons::BOOK size=15 />
+                        "Search my files"
                     </label>
                     <For
                         each=servers
