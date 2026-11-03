@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Clippy (server)
+        run: cargo clippy -p neko-server -p neko-shared --all-targets -- -D warnings
+      - name: Clippy (web)
+        run: cargo clippy -p neko-web --target wasm32-unknown-unknown -- -D warnings
+      - name: Tests
+        run: cargo test -p neko-server -p neko-shared -p neko-web
+      - name: Build web UI
+        run: |
+          cargo install trunk --locked
+          cd crates/web && trunk build --release
