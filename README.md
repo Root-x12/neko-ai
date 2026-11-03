@@ -24,6 +24,7 @@ Each mode has a light and a dark version. There's an animated cat mascot that bl
 | **Tools** | Web search (DuckDuckGo with no key, SearXNG, Brave, Tavily) and page reading, switched on per chat. The AI calls them by itself and each call shows as an expandable card |
 | **MCP** | Plug in any MCP server: remote over Streamable HTTP (with encrypted auth headers) or a local command over stdio (admin only) |
 | **Files** | Attach images, PDFs and text/code files by clicking, pasting or dragging. Images and PDFs go to the model natively where the provider supports it, otherwise as extracted text |
+| **Canvas** | HTML, SVG, Mermaid diagrams and React components from the chat render in a side panel, with preview and code views, a switcher between artifacts, and download. Previews run in a sandboxed frame with no network or cookie access, using local copies of React, Tailwind, Babel and Mermaid |
 | **Privacy** | No telemetry, no CDNs, no external fonts. API keys are encrypted at rest (ChaCha20-Poly1305) and never sent back to the browser |
 
 ## Quick start
@@ -88,7 +89,8 @@ crates/
   shared/   types shared by server & web, SSE parser
   server/   Axum API, SQLite (FTS5 search), auth, provider adapters, streaming,
             tool loop (chat.rs), web tools + MCP client (tools/), uploads
-  web/      Leptos UI, themes (style/main.css), mascot, PWA assets
+  web/      Leptos UI, themes (style/main.css), mascot, PWA assets,
+            vendor/ (preview-only libraries, see vendor/README.md)
 ```
 
 ## Roadmap
@@ -96,6 +98,6 @@ crates/
 1. ✅ Core: providers, streaming, Markdown and code, history and search, model switching, parameters, auth
 2. ✅ Themes and devices: Neko/Cyber, palettes, light/dark, phone layout, device sessions
 3. ✅ Tools: MCP client, web search and URL fetch toggles, PDF and image uploads
-4. Canvas: HTML, SVG, Mermaid and React previews in a side panel
+4. ✅ Canvas: HTML, SVG, Mermaid and React previews in a side panel
 5. Security: PII and secret detection before sending, prompt-injection scanning, audit logs, team roles, model allowlists, retention policies
 6. Extras: export to Markdown/PDF/JSON, memory across chats, RAG over your files

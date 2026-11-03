@@ -62,6 +62,15 @@ pub struct PendingFile {
 
 const TOOLS_KEY: &str = "neko.tools";
 
+/// What the canvas is showing.
+#[derive(Clone, PartialEq)]
+pub struct CanvasItem {
+    pub msg_id: i64,
+    pub index: usize,
+    pub kind: crate::markdown::ArtifactKind,
+    pub code: String,
+}
+
 const LAST_MODEL_KEY: &str = "neko.lastModel";
 
 #[derive(Clone, Copy)]
@@ -94,6 +103,12 @@ pub struct Ctx {
     pub pending: RwSignal<Vec<PendingFile>>,
     pub tools: RwSignal<ToolSelection>,
     pub mcp_servers: RwSignal<Vec<McpServer>>,
+    pub canvas: RwSignal<Option<CanvasItem>>,
+    /// Show the code instead of the preview.
+    pub canvas_code: RwSignal<bool>,
+    pub canvas_full: RwSignal<bool>,
+    /// Bumped on every open so the preview frame reloads even for the same artifact.
+    pub canvas_rev: RwSignal<u32>,
 }
 
 impl Ctx {
@@ -128,6 +143,10 @@ impl Ctx {
                 theme::load_pref(TOOLS_KEY).and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default(),
             ),
             mcp_servers: RwSignal::new(Vec::new()),
+            canvas: RwSignal::new(None),
+            canvas_code: RwSignal::new(false),
+            canvas_full: RwSignal::new(false),
+            canvas_rev: RwSignal::new(0),
         }
     }
 
@@ -262,6 +281,7 @@ impl Ctx {
 
     pub fn new_chat(self) {
         self.stop();
+        self.canvas.set(None);
         self.current_id.set(None);
         self.current_title.set(String::new());
         self.messages.set(Vec::new());
@@ -275,6 +295,7 @@ impl Ctx {
             return;
         }
         self.stop();
+        self.canvas.set(None);
         self.current_id.set(Some(id));
         self.editing.set(None);
         self.loading_chat.set(true);
@@ -508,6 +529,13 @@ impl Ctx {
                         v.error.set(message.error);
                         v.tool_calls.set(message.tool_calls);
                         v.streaming.set(false);
+                        // Show the newest artifact right away on wide screens (phones keep the chat).
+                        let count = crate::markdown::artifacts(&v.content.get_untracked()).len();
+                        if count > 0
+                            && util::window().inner_width().ok().and_then(|w| w.as_f64()).unwrap_or(0.0) > 860.0
+                        {
+                            self.open_artifact(v.id, count - 1);
+                        }
                     }
                 }
             }
@@ -563,6 +591,17 @@ impl Ctx {
         self.editing.set(None);
         self.draft.set(String::new());
         self.pending.set(Vec::new());
+    }
+
+    // ---------- canvas ----------
+
+    pub fn open_artifact(self, msg_id: i64, index: usize) {
+        let content =
+            self.messages.with_untracked(|l| l.iter().find(|m| m.id == msg_id).map(|m| m.content.get_untracked()));
+        let Some(a) = content.and_then(|c| crate::markdown::artifacts(&c).into_iter().nth(index)) else { return };
+        self.canvas_code.set(false);
+        self.canvas_rev.update(|r| *r += 1);
+        self.canvas.set(Some(CanvasItem { msg_id, index, kind: a.kind, code: a.code }));
     }
 
     // ---------- attachments & tools ----------

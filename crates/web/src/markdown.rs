@@ -28,38 +28,151 @@ fn safe_url(url: &str) -> bool {
     }
 }
 
-fn code_block(lang: &str, code: &str) -> String {
-    let lang: String = lang
-        .split(|c: char| c.is_whitespace() || c == ',' || c == '{')
+/// Content the canvas can render.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArtifactKind {
+    Html,
+    Svg,
+    Mermaid,
+    React,
+}
+
+impl ArtifactKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ArtifactKind::Html => "html",
+            ArtifactKind::Svg => "svg",
+            ArtifactKind::Mermaid => "mermaid",
+            ArtifactKind::React => "react",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ArtifactKind::Html => "HTML",
+            ArtifactKind::Svg => "SVG",
+            ArtifactKind::Mermaid => "Diagram",
+            ArtifactKind::React => "React",
+        }
+    }
+
+    pub fn file_ext(self) -> &'static str {
+        match self {
+            ArtifactKind::Html => "html",
+            ArtifactKind::Svg => "svg",
+            ArtifactKind::Mermaid => "mmd",
+            ArtifactKind::React => "jsx",
+        }
+    }
+
+    /// highlight.js language for the code view.
+    pub fn code_lang(self) -> &'static str {
+        match self {
+            ArtifactKind::Html | ArtifactKind::Svg => "xml",
+            ArtifactKind::Mermaid => "plaintext",
+            ArtifactKind::React => "javascript",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Artifact {
+    pub kind: ArtifactKind,
+    pub code: String,
+}
+
+fn clean_lang(lang: &str) -> String {
+    lang.split(|c: char| c.is_whitespace() || c == ',' || c == '{')
         .next()
         .unwrap_or("")
         .chars()
         .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '#' | '-' | '_'))
         .take(20)
         .collect::<String>()
-        .to_ascii_lowercase();
+        .to_ascii_lowercase()
+}
+
+pub fn artifact_kind(lang: &str, code: &str) -> Option<ArtifactKind> {
+    let head = code.trim_start();
+    let starts_svg = head.starts_with("<svg") || (head.starts_with("<?xml") && head.contains("<svg"));
+    match clean_lang(lang).as_str() {
+        "html" | "htm" | "xhtml" => Some(ArtifactKind::Html),
+        "svg" => Some(ArtifactKind::Svg),
+        "xml" if starts_svg => Some(ArtifactKind::Svg),
+        "mermaid" | "mmd" => Some(ArtifactKind::Mermaid),
+        "jsx" | "tsx" | "react" => Some(ArtifactKind::React),
+        _ => None,
+    }
+}
+
+fn code_block(lang: &str, code: &str, preview_index: Option<usize>) -> String {
+    let lang = clean_lang(lang);
     let class = if lang.is_empty() { String::new() } else { format!(" class=\"language-{lang}\"") };
     let label = if lang.is_empty() { "code".to_string() } else { lang };
+    let preview = preview_index
+        .map(|i| {
+            format!("<button type=\"button\" class=\"copy-btn preview-btn\" data-preview=\"{i}\">▶ Preview</button>")
+        })
+        .unwrap_or_default();
     format!(
-        "<div class=\"code-block\"><div class=\"code-head\"><span>{label}</span>\
-         <button type=\"button\" class=\"copy-btn\" data-copy-code>Copy</button></div>\
+        "<div class=\"code-block\"><div class=\"code-head\"><span>{label}</span><span class=\"code-actions\">{preview}\
+         <button type=\"button\" class=\"copy-btn\" data-copy-code>Copy</button></span></div>\
          <pre><code{class}>{}</code></pre></div>",
         escape(code)
     )
 }
 
+/// pulldown-cmark closes an unterminated fence at the end of input; a block still being
+/// streamed must not count as finished.
+fn fence_closed(md: &str, range: std::ops::Range<usize>) -> bool {
+    let src = md.get(range).unwrap_or("").trim_end();
+    let first = src.lines().next().unwrap_or("").trim_start();
+    let fence: String = first.chars().take_while(|c| *c == '`' || *c == '~').collect();
+    !fence.is_empty() && src.lines().count() > 1 && src.lines().last().is_some_and(|l| l.trim().starts_with(&fence))
+}
+
+/// Every previewable code block in a message, in order (matches the `data-preview` indexes).
+pub fn artifacts(md: &str) -> Vec<Artifact> {
+    let mut out = Vec::new();
+    let mut code: Option<(String, String)> = None;
+    for (ev, range) in Parser::new_ext(md, Options::empty()).into_offset_iter() {
+        match (&mut code, ev) {
+            (None, Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(l)))) if fence_closed(md, range) => {
+                code = Some((l.to_string(), String::new()))
+            }
+            (Some((_, text)), Event::Text(t)) => text.push_str(&t),
+            (Some(_), Event::End(TagEnd::CodeBlock)) => {
+                let (lang, text) = code.take().unwrap_or_default();
+                if let Some(kind) = artifact_kind(&lang, &text) {
+                    out.push(Artifact { kind, code: text });
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 pub fn render(md: &str) -> String {
     let opts = Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
     let mut events: Vec<Event> = Vec::new();
-    let mut code: Option<(String, String)> = None; // (lang, text)
+    let mut code: Option<(String, String, bool)> = None; // (lang, text, fence closed)
+    let mut previews = 0usize;
+    let mut block = |lang: &str, text: &str, closed: bool| {
+        let idx = artifact_kind(lang, text).filter(|_| closed).map(|_| {
+            previews += 1;
+            previews - 1
+        });
+        code_block(lang, text, idx)
+    };
 
-    for ev in Parser::new_ext(md, opts) {
-        if let Some((_, text)) = &mut code {
+    for (ev, range) in Parser::new_ext(md, opts).into_offset_iter() {
+        if let Some((_, text, _)) = &mut code {
             match ev {
                 Event::Text(t) => text.push_str(&t),
                 Event::End(TagEnd::CodeBlock) => {
-                    let (lang, text) = code.take().unwrap();
-                    events.push(Event::Html(CowStr::from(code_block(&lang, &text))));
+                    let (lang, text, closed) = code.take().unwrap();
+                    events.push(Event::Html(CowStr::from(block(&lang, &text, closed))));
                 }
                 _ => {}
             }
@@ -67,11 +180,11 @@ pub fn render(md: &str) -> String {
         }
         match ev {
             Event::Start(Tag::CodeBlock(kind)) => {
-                let lang = match kind {
-                    CodeBlockKind::Fenced(l) => l.to_string(),
-                    CodeBlockKind::Indented => String::new(),
+                let (lang, closed) = match kind {
+                    CodeBlockKind::Fenced(l) => (l.to_string(), fence_closed(md, range)),
+                    CodeBlockKind::Indented => (String::new(), false),
                 };
-                code = Some((lang, String::new()));
+                code = Some((lang, String::new(), closed));
             }
             Event::Html(h) | Event::InlineHtml(h) => events.push(Event::Text(h)),
             Event::Start(Tag::Link { link_type, dest_url, title, id }) => {
@@ -89,8 +202,8 @@ pub fn render(md: &str) -> String {
         }
     }
     // Unterminated fence while streaming.
-    if let Some((lang, text)) = code {
-        events.push(Event::Html(CowStr::from(code_block(&lang, &text))));
+    if let Some((lang, text, _)) = code {
+        events.push(Event::Html(CowStr::from(code_block(&lang, &text, None))));
     }
     let mut out = String::with_capacity(md.len() * 3 / 2);
     html::push_html(&mut out, events.into_iter());
@@ -130,6 +243,20 @@ mod tests {
         assert!(out.contains("data-copy-code"));
         let open = render("```py\nprint(1)");
         assert!(open.contains("language-py"));
+    }
+
+    #[test]
+    fn finds_artifacts() {
+        let md = "Here:\n```html\n<h1>Hi</h1>\n```\n```rust\nfn x(){}\n```\n```xml\n<svg></svg>\n```\n```mermaid\ngraph TD; A-->B\n```\n```tsx\nexport default function App(){return <b/>}\n```";
+        let a = artifacts(md);
+        let kinds: Vec<_> = a.iter().map(|x| x.kind).collect();
+        assert_eq!(kinds, vec![ArtifactKind::Html, ArtifactKind::Svg, ArtifactKind::Mermaid, ArtifactKind::React]);
+        assert_eq!(a[0].code, "<h1>Hi</h1>\n");
+        let html = render(md);
+        assert!(html.contains("data-preview=\"0\"") && html.contains("data-preview=\"3\""));
+        assert_eq!(html.matches("data-preview=").count(), 4, "rust block has no preview button");
+        // A block still streaming (no closing fence) gets no preview button yet.
+        assert!(!render("```html\n<p>").contains("data-preview"));
     }
 
     #[test]

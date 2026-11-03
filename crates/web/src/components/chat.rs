@@ -60,6 +60,14 @@ pub fn ChatView() -> impl IntoView {
             set_timeout(move || btn.set_text_content(Some("Copy")), std::time::Duration::from_millis(1500));
             return;
         }
+        if let Ok(Some(btn)) = target.closest("[data-preview]") {
+            let index = btn.get_attribute("data-preview").and_then(|v| v.parse::<usize>().ok());
+            let msg = btn.closest("article[data-msg-id]").ok().flatten().and_then(|a| a.get_attribute("data-msg-id"));
+            if let (Some(index), Some(msg_id)) = (index, msg.and_then(|v| v.parse::<i64>().ok())) {
+                ctx.open_artifact(msg_id, index);
+            }
+            return;
+        }
         if let Ok(Some(a)) = target.closest(".md a[href]") {
             let href = a.get_attribute("href").unwrap_or_default();
             if href.starts_with("http://") || href.starts_with("https://") {
@@ -214,6 +222,7 @@ fn MessageItem(m: MsgView) -> impl IntoView {
     view! {
         <article
             class="msg"
+            data-msg-id=m.id
             class:user=is_user
             class:assistant=!is_user
             class:streaming=move || m.streaming.get()

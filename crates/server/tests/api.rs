@@ -540,3 +540,19 @@ async fn tools_mcp_and_uploads() {
     assert_eq!(c.req(M::DELETE, &format!("/conversations/{}", conv.id)).send().await.unwrap().status(), 204);
     assert_eq!(c.req(M::GET, &format!("/uploads/{}", att.id)).send().await.unwrap().status(), 404);
 }
+
+#[tokio::test]
+async fn canvas_runner_is_locked_down() {
+    let (c, _) = start_app(false).await;
+    let root = c.base.trim_end_matches("/api");
+    let resp = reqwest::get(format!("{root}/canvas.html")).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let csp = resp.headers()["content-security-policy"].to_str().unwrap().to_string();
+    assert!(csp.contains("connect-src 'none'"), "previews must not reach the network: {csp}");
+    assert!(csp.contains("default-src 'none'") && csp.contains("frame-ancestors 'self'"));
+    assert_eq!(resp.headers()["x-frame-options"], "SAMEORIGIN");
+    assert!(resp.text().await.unwrap().contains("neko-render"));
+    // Everything else stays unframeable.
+    let other = reqwest::get(format!("{root}/api/health")).await.unwrap();
+    assert_eq!(other.headers()["x-frame-options"], "DENY");
+}

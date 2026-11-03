@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Preview</title>
+<style>
+  html, body { margin: 0; min-height: 100%; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+  body.centered { display: grid; place-items: center; min-height: 100vh; padding: 16px; box-sizing: border-box; }
+  body.centered > #root { width: 100%; display: flex; justify-content: center; }
+  body.centered > #root > svg { max-width: 100%; height: auto; }
+  body.dark { background: #15131c; color: #ece8f5; }
+  .neko-error {
+    margin: 16px; padding: 14px 16px; border-radius: 10px; white-space: pre-wrap; font: 13px/1.5 ui-monospace, Menlo, monospace;
+    background: #fff1f3; color: #a3123a; border: 1px solid #f7c4d0;
+  }
+  .neko-loading { font: 14px system-ui; color: #888; padding: 24px; }
+</style>
+</head>
+<body>
+<div id="root"><div class="neko-loading">Preparing preview…</div></div>
+<script>
+// Neko AI artifact runner. It runs in a sandboxed iframe (opaque origin: no cookies, no access
+// to the app) with a CSP that only allows this server's vendored libraries and no network calls.
+(function () {
+  "use strict";
+
+  // Sandboxed documents can't use storage; give apps an in-memory stand-in instead of a crash.
+  function memoryStorage() {
+    var data = {};
+    return {
+      getItem: function (k) { return Object.prototype.hasOwnProperty.call(data, k) ? data[k] : null; },
+      setItem: function (k, v) { data[k] = String(v); },
+      removeItem: function (k) { delete data[k]; },
+      clear: function () { data = {}; },
+      key: function (i) { return Object.keys(data)[i] || null; },
+      get length() { return Object.keys(data).length; }
+    };
+  }
+  ["localStorage", "sessionStorage"].forEach(function (name) {
+    try { window[name].getItem("x"); } catch (e) {
+      try { Object.defineProperty(window, name, { value: memoryStorage(), configurable: true }); } catch (e2) {}
+    }
+  });
+
+  var root = document.getElementById("root");
+
+  function showError(message) {
+    var box = document.createElement("pre");
+    box.className = "neko-error";
+    box.textContent = "⚠ " + message;
+    document.body.appendChild(box);
+  }
+  window.addEventListener("error", function (e) { showError(e.message || "Script error"); });
+  window.addEventListener("unhandledrejection", function (e) { showError(String(e.reason && e.reason.message || e.reason)); });
+
+  var loaded = {};
+  function load(name) {
+    if (!loaded[name]) {
+      loaded[name] = new Promise(function (resolve, reject) {
+        var s = document.createElement("script");
+        s.src = "/vendor/" + name + ".js";
+        s.onload = resolve;
+        s.onerror = function () { reject(new Error("Could not load " + name)); };
+        document.head.appendChild(s);
+      });
+    }
+    return loaded[name];
+  }
+
+  // Common CDN script tags are pointed at the local copies so previews work offline.
+  var CDN = [
+    [/https?:\/\/cdn\.tailwindcss\.com[^"'\s>]*/g, "/vendor/tailwind.js"],
+    [/https?:\/\/(?:cdn\.jsdelivr\.net\/npm|unpkg\.com)\/@tailwindcss\/browser[^"'\s>]*/g, "/vendor/tailwind.js"],
+    [/https?:\/\/(?:cdn\.jsdelivr\.net\/npm|unpkg\.com|cdnjs\.cloudflare\.com\/ajax\/libs)\/react-dom[@/][^"'\s>]*/g, "/vendor/react-dom.js"],
+    [/https?:\/\/(?:cdn\.jsdelivr\.net\/npm|unpkg\.com|cdnjs\.cloudflare\.com\/ajax\/libs)\/react[@/][^"'\s>]*/g, "/vendor/react.js"],
+    [/https?:\/\/(?:cdn\.jsdelivr\.net\/npm|unpkg\.com)\/@babel\/standalone[^"'\s>]*/g, "/vendor/babel.js"],
+    [/https?:\/\/(?:cdn\.jsdelivr\.net\/npm|unpkg\.com)\/mermaid[^"'\s>]*/g, "/vendor/mermaid.js"]
+  ];
+
+  function renderHtml(code) {
+    var html = code;
+    CDN.forEach(function (pair) { html = html.replace(pair[0], pair[1]); });
+    if (!/<html[\s>]/i.test(html)) {
+      html = "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"></head><body>" + html + "</body></html>";
+    }
+    document.open();
+    document.write(html);
+    document.close();
+  }
+
+  function renderSvg(code, dark) {
+    document.body.className = "centered" + (dark ? " dark" : "");
+    root.innerHTML = code;
+  }
+
+  function renderMermaid(code, dark) {
+    document.body.className = "centered" + (dark ? " dark" : "");
+    return load("mermaid").then(function () {
+      window.mermaid.initialize({ startOnLoad: false, securityLevel: "strict", theme: dark ? "dark" : "default" });
+      return window.mermaid.render("neko-mermaid", code);
+    }).then(function (out) {
+      root.innerHTML = out.svg;
+      // Mermaid pins a small max-width; let the diagram use the panel.
+      var svg = root.querySelector("svg");
+      if (svg) {
+        svg.style.maxWidth = "min(100%, 1100px)";
+        svg.style.width = "100%";
+        svg.style.height = "auto";
+        svg.style.maxHeight = "92vh";
+        svg.removeAttribute("height");
+      }
+    });
+  }
+
+  // Icon packs are popular in generated components; stand in with a neutral dot so the UI renders.
+  function iconProxy(React) {
+    return new Proxy({}, {
+      get: function (_, name) {
+        if (name === "__esModule") return true;
+        return function Icon(props) {
+          var size = (props && props.size) || 20;
+          return React.createElement("span", {
+            className: props && props.className, title: String(name),
+            style: { display: "inline-block", width: size, height: size, borderRadius: "50%", background: "currentColor", opacity: 0.35, verticalAlign: "middle" }
+          });
+        };
+      }
+    });
+  }
+
+  function renderReact(code) {
+    document.body.className = "";
+    return Promise.all([load("react"), load("babel"), load("tailwind")])
+      .then(function () { return load("react-dom"); })
+      .then(function () {
+        var React = window.React, ReactDOM = window.ReactDOM;
+        var source = code + "\n;try { module.exports.__nekoAuto = typeof App !== 'undefined' ? App : undefined; } catch (e) {}";
+        var out = window.Babel.transform(source, {
+          filename: "App.tsx",
+          presets: [["typescript", { isTSX: true, allExtensions: true }], "react"],
+          plugins: ["transform-modules-commonjs"]
+        }).code;
+        var modules = { "react": React, "react-dom": ReactDOM, "react-dom/client": ReactDOM };
+        function require(name) {
+          if (modules[name]) return modules[name];
+          if (name === "lucide-react" || name.indexOf("@heroicons/") === 0 || name === "react-icons" || name.indexOf("react-icons/") === 0) {
+            return iconProxy(React);
+          }
+          throw new Error("“" + name + "” isn't available in previews. Only react, react-dom and icon packs can be imported.");
+        }
+        var module = { exports: {} };
+        new Function("require", "module", "exports", "React", out)(require, module, module.exports, React);
+        var ex = module.exports;
+        var Component = ex.default || ex.__nekoAuto || ex.App ||
+          Object.keys(ex).map(function (k) { return ex[k]; }).find(function (v) { return typeof v === "function"; });
+        if (!Component) throw new Error("No component found. Export one with `export default function App() { … }`.");
+
+        class Boundary extends React.Component {
+          constructor(p) { super(p); this.state = { error: null }; }
+          static getDerivedStateFromError(error) { return { error: error }; }
+          render() {
+            return this.state.error
+              ? React.createElement("pre", { className: "neko-error" }, "⚠ " + (this.state.error.message || this.state.error))
+              : this.props.children;
+          }
+        }
+        root.innerHTML = "";
+        ReactDOM.createRoot(root).render(React.createElement(Boundary, null, React.createElement(Component)));
+      });
+  }
+
+  var rendered = false;
+  window.addEventListener("message", function (e) {
+    if (e.source !== window.parent || !e.data || e.data.type !== "neko-render" || rendered) return;
+    rendered = true;
+    var d = e.data;
+    try {
+      var job;
+      switch (d.kind) {
+        case "html": renderHtml(d.code); break;
+        case "svg": renderSvg(d.code, d.dark); break;
+        case "mermaid": job = renderMermaid(d.code, d.dark); break;
+        case "react": job = renderReact(d.code); break;
+        default: throw new Error("Unknown preview type " + d.kind);
+      }
+      if (job) job.catch(function (err) { root.innerHTML = ""; showError(err && err.message || String(err)); });
+    } catch (err) {
+      root.innerHTML = "";
+      showError(err && err.message || String(err));
+    }
+  });
+  window.parent.postMessage({ type: "neko-canvas-ready" }, "*");
+})();
+</script>
+</body>
+</html>

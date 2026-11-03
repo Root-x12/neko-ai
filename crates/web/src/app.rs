@@ -7,6 +7,7 @@ use wasm_bindgen::{closure::Closure, JsCast};
 use crate::{
     api,
     components::{
+        canvas::Canvas,
         chat::ChatView,
         login::Login,
         mascot::{Backdrop, Mascot},
@@ -112,9 +113,10 @@ fn Main(user: User, on_signed_out: Callback<()>) -> impl IntoView {
     });
 
     view! {
-        <div class="app">
+        <div class="app" class:with-canvas=move || ctx.canvas.with(|c| c.is_some())>
             <Sidebar />
             <ChatView />
+            <Canvas />
             <ParamsPanel />
             <SettingsModal />
             {move || ctx.toast.get().map(|t| view! {
