@@ -107,3 +107,19 @@ pub fn file_size(bytes: i64) -> String {
         b => format!("{:.1} MB", b as f64 / 1024.0 / 1024.0),
     }
 }
+
+/// Saves text as a file via a temporary object URL.
+pub fn download(filename: &str, mime: &str, content: &str) {
+    let parts = js_sys::Array::of1(&JsValue::from_str(content));
+    let opts = web_sys::BlobPropertyBag::new();
+    opts.set_type(mime);
+    let Ok(blob) = web_sys::Blob::new_with_str_sequence_and_options(&parts, &opts) else { return };
+    let Ok(url) = web_sys::Url::create_object_url_with_blob(&blob) else { return };
+    if let Some(a) = window().document().and_then(|d| d.create_element("a").ok()) {
+        let a: web_sys::HtmlAnchorElement = a.unchecked_into();
+        a.set_href(&url);
+        a.set_download(filename);
+        a.click();
+    }
+    let _ = web_sys::Url::revoke_object_url(&url);
+}

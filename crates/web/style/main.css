@@ -603,6 +603,34 @@ input[type="range"] { width: 100%; }
   .popover { width: min(260px, calc(100vw - 40px)); }
 }
 
+/* ---------- canvas (artifact preview) ---------- */
+.app.with-canvas { grid-template-columns: var(--sidebar-w) minmax(0, 1fr) minmax(380px, 46%); }
+.canvas {
+  display: flex; flex-direction: column; min-width: 0; min-height: 0; z-index: 2;
+  background: var(--surface); border-left: 1px solid var(--border); animation: fade .25s var(--ease);
+}
+.canvas.full { position: fixed; inset: 0; z-index: 45; border-left: none; }
+.canvas-bar {
+  display: flex; align-items: center; gap: 10px; height: 58px; flex: none; padding: 0 10px 0 14px;
+  padding-top: env(safe-area-inset-top); border-bottom: 1px solid var(--border); background: var(--surface-2);
+}
+.canvas-title { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; color: var(--accent); }
+.canvas-title strong { color: var(--text); font-size: 15px; }
+.canvas-nav { display: inline-flex; align-items: center; gap: 2px; margin-left: 6px; }
+.canvas-nav .icon-btn { font-size: 18px; line-height: 1; }
+.canvas-nav .muted { white-space: nowrap; }
+.canvas-actions { display: flex; align-items: center; gap: 2px; }
+.segmented.small .seg { padding: 4px 12px; font-size: 13px; }
+.canvas-body { flex: 1; min-height: 0; position: relative; background: #fff; }
+.canvas-frame { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: #fff; }
+.canvas-frame.dark { background: #15131c; }
+.canvas-code { position: absolute; inset: 0; overflow: auto; background: var(--code-bg); }
+.canvas-code pre { margin: 0; padding: 16px 18px; }
+.canvas-code code { font-family: var(--font-mono); font-size: 13px; line-height: 1.6; color: var(--code-text); white-space: pre; }
+.code-actions { display: inline-flex; gap: 4px; }
+.preview-btn { color: var(--accent) !important; font-weight: 600; }
+[data-mode="cyber"] .canvas { box-shadow: -1px 0 0 var(--accent-soft); }
+
 /* ==========================================================================
    Mascot
    ========================================================================== */
@@ -721,7 +749,12 @@ input[type="range"] { width: 100%; }
    ========================================================================== */
 
 @media (max-width: 860px) {
-  .app { grid-template-columns: minmax(0, 1fr); }
+  .app, .app.with-canvas { grid-template-columns: minmax(0, 1fr); }
+  .canvas { position: fixed; inset: 0; z-index: 45; border-left: none; }
+  .canvas-bar { gap: 4px; padding: 0 4px 0 10px; padding-top: env(safe-area-inset-top); }
+  .canvas-title strong { display: none; }
+  .canvas-nav { margin-left: 0; }
+  .only-desktop { display: none !important; }
   .only-mobile { display: inline-flex; }
   .sidebar {
     position: fixed; top: 0; bottom: 0; left: 0; z-index: 40; width: min(86vw, 320px);

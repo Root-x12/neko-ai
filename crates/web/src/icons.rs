@@ -50,6 +50,9 @@ pub const FILE: &str =
     svg(r#"<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/>"#);
 pub const PDF: &str =
     svg(r#"<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 15h8M8 18h5"/>"#);
+pub const PLAY: &str = svg(r#"<rect x="3" y="4" width="18" height="16" rx="2"/><path d="m10 9 5 3-5 3z"/>"#);
+pub const DOWNLOAD: &str = svg(r#"<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>"#);
+pub const EXPAND: &str = svg(r#"<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>"#);
 
 #[component]
 pub fn Icon(#[prop(into)] svg: &'static str, #[prop(optional)] size: Option<u32>) -> impl IntoView {

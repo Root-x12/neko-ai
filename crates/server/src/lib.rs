@@ -69,12 +69,44 @@ impl AppState {
     }
 }
 
+const CANVAS_HTML: &str = include_str!("../assets/canvas.html");
+
+/// The artifact preview runner. It is loaded in a sandboxed iframe, so it gets its own policy:
+/// scripts only from this server (plus inline/eval for the user's code), no network access,
+/// and it may only be framed by this app.
+async fn canvas_page(headers: axum::http::HeaderMap) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    // A sandboxed document has an opaque origin, so name this server explicitly besides 'self'.
+    let host = headers
+        .get(header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .filter(|h| h.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | ':' | '-' | '[' | ']')))
+        .unwrap_or("localhost");
+    let me = format!("http://{host} https://{host}");
+    let csp = format!(
+        "default-src 'none'; script-src 'self' {me} 'unsafe-inline' 'unsafe-eval'; style-src 'self' {me} 'unsafe-inline'; \
+         img-src 'self' {me} data: blob:; font-src 'self' {me} data:; connect-src 'none'; media-src data: blob:; \
+         frame-ancestors 'self' {me}; base-uri 'none'; form-action 'none'"
+    );
+    (
+        [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8".to_string()),
+            (header::CONTENT_SECURITY_POLICY, csp),
+            (header::X_FRAME_OPTIONS, "SAMEORIGIN".to_string()),
+            (header::CACHE_CONTROL, "no-cache".to_string()),
+        ],
+        CANVAS_HTML,
+    )
+        .into_response()
+}
+
 pub fn router(state: AppState) -> Router {
     let web_dir = state.config.web_dir.clone();
     let static_files = ServeDir::new(&web_dir).fallback(ServeFile::new(web_dir.join("index.html")));
 
     Router::new()
         .nest("/api", api::routes())
+        .route("/canvas.html", axum::routing::get(canvas_page))
         .fallback_service(static_files)
         .layer(CompressionLayer::new())
         .layer(SetResponseHeaderLayer::if_not_present(
