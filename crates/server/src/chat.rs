@@ -352,11 +352,25 @@ async fn generate(
     let (user_message, history, files, assistant_id) = prepared;
 
     let mut turns = history_turns(&s, &history, &files, ws.injection_scan).await;
-    let (toolbox, warnings) = if tool_sel == ToolSelection::default() {
+    let uid = user.id;
+    let (mem_settings, memories) =
+        s.db.call(move |c| Ok((db::memory_settings(c, uid)?, db::list_memories(c, uid)?))).await?;
+    let (toolbox, warnings) = if tool_sel == ToolSelection::default() && !mem_settings.auto_save {
         (Toolbox::empty(), Vec::new())
     } else {
-        Toolbox::build(&s, &user, &tool_sel).await
+        Toolbox::build(&s, &user, &tool_sel, mem_settings.enabled && mem_settings.auto_save, conv_id).await
     };
+    // Memories go into the request's system prompt only; the chat's own prompt is stored unchanged.
+    let mut params = params;
+    if mem_settings.enabled {
+        if let Some(block) = crate::library::memory_prompt(&memories) {
+            params.system_prompt = if params.system_prompt.trim().is_empty() {
+                block
+            } else {
+                format!("{block}\n{}", params.system_prompt)
+            };
+        }
+    }
 
     let (tx, rx) = tokio::sync::mpsc::channel::<StreamEvent>(128);
     let _ = tx.try_send(StreamEvent::Start { user_message, assistant_message_id: assistant_id, model: model.clone() });

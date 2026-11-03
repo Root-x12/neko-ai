@@ -123,3 +123,14 @@ pub fn download(filename: &str, mime: &str, content: &str) {
     }
     let _ = web_sys::Url::revoke_object_url(&url);
 }
+
+/// First `max` characters of `text` on one line, with an ellipsis if cut.
+pub fn excerpt(text: &str, max: usize) -> String {
+    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.chars().count() <= max {
+        return flat;
+    }
+    let mut out: String = flat.chars().take(max).collect();
+    out.push('…');
+    out
+}

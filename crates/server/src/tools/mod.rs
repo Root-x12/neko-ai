@@ -12,10 +12,14 @@ use crate::{db, llm::ToolDef, AppState};
 
 pub const WEB_SEARCH: &str = "web_search";
 pub const FETCH_URL: &str = "fetch_url";
+pub const REMEMBER: &str = "remember";
+pub const SEARCH_KNOWLEDGE: &str = "search_knowledge";
 
 enum Exec {
     WebSearch,
     FetchUrl,
+    Remember { conversation_id: i64 },
+    Knowledge { user: Box<User> },
     Mcp { config: Box<mcp::McpConfig>, tool: String },
 }
 
@@ -29,17 +33,55 @@ pub struct Toolbox {
     pub defs: Vec<ToolDef>,
     entries: HashMap<String, Entry>,
     search: Option<web::SearchConfig>,
+    user_id: i64,
 }
 
 impl Toolbox {
     pub fn empty() -> Self {
-        Self { defs: Vec::new(), entries: HashMap::new(), search: None }
+        Self { defs: Vec::new(), entries: HashMap::new(), search: None, user_id: 0 }
     }
 
     /// Collects the selected tools. MCP servers that can't be reached are reported as warnings
     /// instead of failing the whole request.
-    pub async fn build(s: &AppState, user: &User, sel: &ToolSelection) -> (Self, Vec<(String, String)>) {
+    /// `remember`: offer the memory tool (the user allowed the AI to save memories).
+    pub async fn build(
+        s: &AppState,
+        user: &User,
+        sel: &ToolSelection,
+        remember: bool,
+        conversation_id: i64,
+    ) -> (Self, Vec<(String, String)>) {
         let mut tb = Self::empty();
+        tb.user_id = user.id;
+        if remember {
+            tb.add(
+                REMEMBER,
+                "Saved to memory",
+                "Save a short, durable fact about the user (preferences, projects, name, how they like answers) \
+                 so you remember it in future chats. Only save things the user would want remembered; never \
+                 save secrets. One fact per call.",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": { "fact": { "type": "string", "description": "The fact, in one short sentence" } },
+                    "required": ["fact"]
+                }),
+                Exec::Remember { conversation_id },
+            );
+        }
+        if sel.knowledge {
+            tb.add(
+                SEARCH_KNOWLEDGE,
+                "Searched your files",
+                "Search the user's own uploaded files (notes, docs, PDFs) and return the most relevant passages. \
+                 Use specific keywords; call it again with different words if nothing useful comes back.",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": { "query": { "type": "string", "description": "Keywords to look for" } },
+                    "required": ["query"]
+                }),
+                Exec::Knowledge { user: Box::new(user.clone()) },
+            );
+        }
         let mut warnings = Vec::new();
         let mut sel = sel.clone();
         if s.config.local_only && (sel.web_search || sel.fetch_url) {
@@ -160,6 +202,23 @@ impl Toolbox {
                 Some(url) => web::fetch_url(url, s.config.fetch_allow_private).await,
                 None => Err("Missing `url`".into()),
             },
+            Exec::Remember { conversation_id } => {
+                let fact = args["fact"].as_str().unwrap_or_default();
+                match crate::library::clean_memory(fact) {
+                    Ok(fact) => {
+                        let (uid, cid, f) = (self.user_id, *conversation_id, fact.clone());
+                        match s.db.call(move |c| db::add_memory(c, uid, &f, Some(cid))).await {
+                            Ok(Some(_)) => Ok(format!("Saved: {fact}")),
+                            Ok(None) => Err("Memory is full; ask the user to tidy it in Settings → Memory".into()),
+                            Err(e) => Err(e.to_string()),
+                        }
+                    }
+                    Err(e) => Err(e.message),
+                }
+            }
+            Exec::Knowledge { user } => {
+                crate::library::knowledge_tool(s, user, args["query"].as_str().unwrap_or_default()).await
+            }
             Exec::Mcp { config, tool } => {
                 return s.mcp.call_tool(&s.http, config, tool, args.clone()).await.unwrap_or_else(|e| (e, true));
             }

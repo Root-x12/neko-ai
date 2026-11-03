@@ -29,6 +29,8 @@ pub fn SettingsModal() -> impl IntoView {
                     {tab_btn(SettingsTab::Appearance, "Appearance", icons::PALETTE)}
                     {tab_btn(SettingsTab::Providers, "Providers", icons::KEY)}
                     {tab_btn(SettingsTab::Tools, "Tools", icons::WRENCH)}
+                    {tab_btn(SettingsTab::Memory, "Memory", icons::BRAIN)}
+                    {tab_btn(SettingsTab::Knowledge, "My files", icons::BOOK)}
                     {tab_btn(SettingsTab::Devices, "Devices", icons::DEVICE)}
                     <Show when=move || ctx.user.with(|u| u.role != Role::User)>
                         {tab_btn(SettingsTab::Admin, "Admin", icons::SHIELD)}
@@ -43,6 +45,8 @@ pub fn SettingsModal() -> impl IntoView {
                         Some(SettingsTab::Appearance) => view! { <Appearance /> }.into_any(),
                         Some(SettingsTab::Providers) => view! { <Providers /> }.into_any(),
                         Some(SettingsTab::Tools) => view! { <Tools /> }.into_any(),
+                        Some(SettingsTab::Memory) => view! { <crate::components::library::MemoryTab /> }.into_any(),
+                        Some(SettingsTab::Knowledge) => view! { <crate::components::library::KnowledgeTab /> }.into_any(),
                         Some(SettingsTab::Admin) => view! { <crate::components::admin::AdminPanel /> }.into_any(),
                         Some(SettingsTab::Devices) => view! { <Devices /> }.into_any(),
                         Some(SettingsTab::Account) => view! { <Account /> }.into_any(),
@@ -527,6 +531,13 @@ fn Account() -> impl IntoView {
                 </ul>
             }
         })}
+        <h4>"Your data"</h4>
+        <p class="muted small">"Download every chat, memory and file listing as one JSON file."</p>
+        <a class="btn ghost" href="/api/export" download="neko-ai-export.json">
+            <Icon svg=icons::DOWNLOAD size=15 />
+            "Download all my data"
+        </a>
+        <br />
         <button class="btn danger-outline" on:click=move |_| ctx.sign_out()>"Sign out"</button>
     }
 }

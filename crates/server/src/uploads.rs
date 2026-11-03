@@ -82,7 +82,7 @@ pub async fn pdf_text(bytes: Vec<u8>) -> Result<String, String> {
     .map_err(|e| e.to_string())?
 }
 
-fn clean_name(name: &str) -> String {
+pub fn clean_name(name: &str) -> String {
     let base = name.rsplit(['/', '\\']).next().unwrap_or(name);
     let clean: String = base.chars().filter(|c| !c.is_control()).take(120).collect();
     if clean.trim().is_empty() {

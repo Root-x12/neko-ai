@@ -55,6 +55,14 @@ pub const DOWNLOAD: &str = svg(r#"<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>"#);
 pub const EXPAND: &str = svg(r#"<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>"#);
 pub const SHIELD: &str =
     svg(r#"<path d="M12 3 4 6v6c0 4.5 3.4 8.3 8 9 4.6-.7 8-4.5 8-9V6z"/><path d="m9 12 2 2 4-4"/>"#);
+pub const BRAIN: &str = svg(
+    r#"<path d="M9 4a3 3 0 0 0-3 3 3 3 0 0 0-2 5 3 3 0 0 0 2 5 3 3 0 0 0 6 1V5a3 3 0 0 0-3-1z"/><path d="M15 4a3 3 0 0 1 3 3 3 3 0 0 1 2 5 3 3 0 0 1-2 5 3 3 0 0 1-6 1"/>"#,
+);
+pub const BOOK: &str = svg(r#"<path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z"/><path d="M4 21V5M8 7h7M8 11h5"/>"#);
+pub const UPLOAD: &str = svg(r#"<path d="M12 20V9M7 14l5-5 5 5M5 4h14"/>"#);
+pub const CODE_BRACES: &str = svg(
+    r#"<path d="M8 4H7a2 2 0 0 0-2 2v4l-2 2 2 2v4a2 2 0 0 0 2 2h1M16 4h1a2 2 0 0 1 2 2v4l2 2-2 2v4a2 2 0 0 1-2 2h-1"/>"#,
+);
 
 #[component]
 pub fn Icon(#[prop(into)] svg: &'static str, #[prop(optional)] size: Option<u32>) -> impl IntoView {

@@ -8,8 +8,9 @@ use std::{
 
 use neko_shared::{
     AdminUser, Attachment, AttachmentKind, AuditEntry, ChatParams, Conversation, ConversationSummary, DeviceSession,
-    GuardPolicy, McpServer, McpTransport, Message, MsgRole, Provider, ProviderKind, Role, SearchBackend, SearchHit,
-    SearchSettings, ToolCall, UpdateUser, User, Workspace, WorkspaceInput,
+    Document, GuardPolicy, KnowledgeHit, McpServer, McpTransport, Memory, MemorySettings, Message, MsgRole, Provider,
+    ProviderKind, Role, SearchBackend, SearchHit, SearchSettings, ToolCall, UpdateUser, User, Workspace,
+    WorkspaceInput,
 };
 use rusqlite::{params, Connection, OptionalExtension, Row};
 
@@ -155,6 +156,46 @@ CREATE TABLE audit_log (
 );
 CREATE INDEX audit_ts ON audit_log(ts DESC);
 CREATE INDEX audit_workspace ON audit_log(workspace_id, ts DESC);
+"#,
+    r#"
+CREATE TABLE memories (
+    id                     INTEGER PRIMARY KEY,
+    user_id                INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    content                TEXT NOT NULL,
+    source_conversation_id INTEGER,
+    created_at             INTEGER NOT NULL,
+    updated_at             INTEGER NOT NULL
+);
+CREATE INDEX memories_user ON memories(user_id, id);
+CREATE TABLE user_prefs (
+    user_id        INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    memory_enabled INTEGER NOT NULL DEFAULT 1,
+    memory_auto    INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE documents (
+    id         INTEGER PRIMARY KEY,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name       TEXT NOT NULL,
+    mime       TEXT NOT NULL,
+    size       INTEGER NOT NULL,
+    path       TEXT NOT NULL,
+    flags      TEXT NOT NULL DEFAULT '[]',
+    created_at INTEGER NOT NULL
+);
+CREATE TABLE doc_chunks (
+    id          INTEGER PRIMARY KEY,
+    document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    idx         INTEGER NOT NULL,
+    content     TEXT NOT NULL
+);
+CREATE INDEX doc_chunks_doc ON doc_chunks(document_id, idx);
+CREATE VIRTUAL TABLE doc_chunks_fts USING fts5(content, content='doc_chunks', content_rowid='id', tokenize='porter unicode61');
+CREATE TRIGGER doc_chunks_ai AFTER INSERT ON doc_chunks BEGIN
+    INSERT INTO doc_chunks_fts(rowid, content) VALUES (new.id, new.content);
+END;
+CREATE TRIGGER doc_chunks_ad AFTER DELETE ON doc_chunks BEGIN
+    INSERT INTO doc_chunks_fts(doc_chunks_fts, rowid, content) VALUES ('delete', old.id, old.content);
+END;
 "#,
 ];
 
@@ -687,8 +728,9 @@ pub fn sweep_orphan_attachments(c: &Connection, cutoff: i64) -> DbResult<Vec<Str
     Ok(paths)
 }
 
+/// Every file the database points to (chat attachments and knowledge documents).
 pub fn all_attachment_paths(c: &Connection) -> DbResult<std::collections::HashSet<String>> {
-    let mut st = c.prepare("SELECT path FROM attachments")?;
+    let mut st = c.prepare("SELECT path FROM attachments UNION SELECT path FROM documents")?;
     let rows = st.query_map([], |r| r.get(0))?;
     rows.collect()
 }
@@ -1043,7 +1085,9 @@ pub fn update_user(c: &Connection, id: i64, u: &UpdateUser, password_hash: Optio
 pub fn delete_user(c: &mut Connection, id: i64) -> DbResult<Option<Vec<String>>> {
     let tx = c.transaction()?;
     let paths: Vec<String> = {
-        let mut st = tx.prepare("SELECT path FROM attachments WHERE user_id = ?1")?;
+        let mut st = tx.prepare(
+            "SELECT path FROM attachments WHERE user_id = ?1 UNION SELECT path FROM documents WHERE user_id = ?1",
+        )?;
         let rows = st.query_map([id], |r| r.get(0))?;
         rows.collect::<DbResult<_>>()?
     };
@@ -1140,6 +1184,196 @@ pub fn retention_sweep(c: &mut Connection, now_ts: i64) -> DbResult<(usize, Vec<
     Ok((expired.len(), paths))
 }
 
+// ---------- memory ----------
+
+pub const MAX_MEMORIES: i64 = 200;
+
+pub fn memory_settings(c: &Connection, user_id: i64) -> DbResult<MemorySettings> {
+    Ok(c.query_row("SELECT memory_enabled, memory_auto FROM user_prefs WHERE user_id = ?1", [user_id], |r| {
+        Ok(MemorySettings { enabled: r.get(0)?, auto_save: r.get(1)? })
+    })
+    .optional()?
+    .unwrap_or_default())
+}
+
+pub fn save_memory_settings(c: &Connection, user_id: i64, m: MemorySettings) -> DbResult<()> {
+    c.execute(
+        "INSERT INTO user_prefs (user_id, memory_enabled, memory_auto) VALUES (?1, ?2, ?3)
+         ON CONFLICT(user_id) DO UPDATE SET memory_enabled = excluded.memory_enabled, memory_auto = excluded.memory_auto",
+        params![user_id, m.enabled, m.auto_save],
+    )?;
+    Ok(())
+}
+
+fn memory_from_row(r: &Row) -> DbResult<Memory> {
+    Ok(Memory { id: r.get(0)?, content: r.get(1)?, created_at: r.get(2)?, updated_at: r.get(3)? })
+}
+
+pub fn list_memories(c: &Connection, user_id: i64) -> DbResult<Vec<Memory>> {
+    let mut st =
+        c.prepare("SELECT id, content, created_at, updated_at FROM memories WHERE user_id = ?1 ORDER BY id")?;
+    let rows = st.query_map([user_id], memory_from_row)?;
+    rows.collect()
+}
+
+/// Adds a memory unless an identical one exists. `None` = the limit is reached.
+pub fn add_memory(c: &Connection, user_id: i64, content: &str, source: Option<i64>) -> DbResult<Option<Memory>> {
+    if let Some(existing) = c
+        .query_row(
+            "SELECT id, content, created_at, updated_at FROM memories WHERE user_id = ?1 AND lower(content) = lower(?2)",
+            params![user_id, content],
+            memory_from_row,
+        )
+        .optional()?
+    {
+        return Ok(Some(existing));
+    }
+    let count: i64 = c.query_row("SELECT COUNT(*) FROM memories WHERE user_id = ?1", [user_id], |r| r.get(0))?;
+    if count >= MAX_MEMORIES {
+        return Ok(None);
+    }
+    let t = now();
+    c.execute(
+        "INSERT INTO memories (user_id, content, source_conversation_id, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?4)",
+        params![user_id, content, source, t],
+    )?;
+    Ok(Some(Memory { id: c.last_insert_rowid(), content: content.to_string(), created_at: t, updated_at: t }))
+}
+
+pub fn update_memory(c: &Connection, user_id: i64, id: i64, content: &str) -> DbResult<Option<Memory>> {
+    let n = c.execute(
+        "UPDATE memories SET content = ?3, updated_at = ?4 WHERE id = ?1 AND user_id = ?2",
+        params![id, user_id, content, now()],
+    )?;
+    if n == 0 {
+        return Ok(None);
+    }
+    c.query_row("SELECT id, content, created_at, updated_at FROM memories WHERE id = ?1", [id], memory_from_row)
+        .optional()
+}
+
+pub fn delete_memory(c: &Connection, user_id: i64, id: i64) -> DbResult<bool> {
+    Ok(c.execute("DELETE FROM memories WHERE id = ?1 AND user_id = ?2", params![id, user_id])? > 0)
+}
+
+pub fn clear_memories(c: &Connection, user_id: i64) -> DbResult<usize> {
+    c.execute("DELETE FROM memories WHERE user_id = ?1", [user_id])
+}
+
+// ---------- knowledge library ----------
+
+const DOCUMENT_COLS: &str =
+    "d.id, d.name, d.mime, d.size, (SELECT COUNT(*) FROM doc_chunks k WHERE k.document_id = d.id), d.flags, d.created_at";
+
+fn document_from_row(r: &Row) -> DbResult<Document> {
+    Ok(Document {
+        id: r.get(0)?,
+        name: r.get(1)?,
+        mime: r.get(2)?,
+        size: r.get(3)?,
+        chunks: r.get(4)?,
+        flags: serde_json::from_str(&r.get::<_, String>(5)?).unwrap_or_default(),
+        created_at: r.get(6)?,
+    })
+}
+
+pub fn list_documents(c: &Connection, user_id: i64) -> DbResult<Vec<Document>> {
+    let mut st =
+        c.prepare(&format!("SELECT {DOCUMENT_COLS} FROM documents d WHERE d.user_id = ?1 ORDER BY d.id DESC"))?;
+    let rows = st.query_map([user_id], document_from_row)?;
+    rows.collect()
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn insert_document(
+    c: &mut Connection,
+    user_id: i64,
+    name: &str,
+    mime: &str,
+    size: i64,
+    path: &str,
+    flags: &[String],
+    chunks: &[String],
+) -> DbResult<Document> {
+    let tx = c.transaction()?;
+    tx.execute(
+        "INSERT INTO documents (user_id, name, mime, size, path, flags, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![user_id, name, mime, size, path, serde_json::to_string(flags).unwrap_or_default(), now()],
+    )?;
+    let id = tx.last_insert_rowid();
+    {
+        let mut st = tx.prepare("INSERT INTO doc_chunks (document_id, idx, content) VALUES (?1, ?2, ?3)")?;
+        for (i, chunk) in chunks.iter().enumerate() {
+            st.execute(params![id, i as i64, chunk])?;
+        }
+    }
+    let doc =
+        tx.query_row(&format!("SELECT {DOCUMENT_COLS} FROM documents d WHERE d.id = ?1"), [id], document_from_row)?;
+    tx.commit()?;
+    Ok(doc)
+}
+
+/// Deletes a document; returns its file path.
+pub fn delete_document(c: &Connection, user_id: i64, id: i64) -> DbResult<Option<String>> {
+    let path: Option<String> = c
+        .query_row("SELECT path FROM documents WHERE id = ?1 AND user_id = ?2", params![id, user_id], |r| r.get(0))
+        .optional()?;
+    if path.is_some() {
+        c.execute("DELETE FROM documents WHERE id = ?1", [id])?;
+    }
+    Ok(path)
+}
+
+const STOPWORDS: &[&str] = &[
+    "a", "an", "and", "are", "as", "at", "be", "by", "can", "do", "does", "for", "from", "has", "have", "how", "i",
+    "in", "is", "it", "me", "my", "of", "on", "or", "our", "the", "this", "that", "to", "was", "what", "when", "where",
+    "which", "who", "why", "with", "you", "your", "about", "tell", "please", "find", "show", "give",
+];
+
+/// Free text → FTS5 query that matches any significant word (BM25 ranks the best chunks first).
+pub fn knowledge_query(input: &str) -> Option<String> {
+    let mut terms: Vec<String> = input
+        .split(|c: char| !c.is_alphanumeric())
+        .map(|w| w.to_lowercase())
+        .filter(|w| w.chars().count() > 1 && !STOPWORDS.contains(&w.as_str()))
+        .collect();
+    terms.sort();
+    terms.dedup();
+    terms.truncate(24);
+    (!terms.is_empty()).then(|| terms.iter().map(|t| format!("\"{t}\"")).collect::<Vec<_>>().join(" OR "))
+}
+
+pub fn search_knowledge(c: &Connection, user_id: i64, q: &str, limit: i64) -> DbResult<Vec<KnowledgeHit>> {
+    let Some(fq) = knowledge_query(q) else { return Ok(Vec::new()) };
+    let mut st = c.prepare(
+        "SELECT d.id, d.name, k.idx, k.content FROM doc_chunks_fts
+         JOIN doc_chunks k ON k.id = doc_chunks_fts.rowid JOIN documents d ON d.id = k.document_id
+         WHERE doc_chunks_fts MATCH ?2 AND d.user_id = ?1 ORDER BY bm25(doc_chunks_fts) LIMIT ?3",
+    )?;
+    let rows = st.query_map(params![user_id, fq, limit], |r| {
+        Ok(KnowledgeHit { document_id: r.get(0)?, document: r.get(1)?, chunk: r.get(2)?, text: r.get(3)? })
+    })?;
+    rows.collect()
+}
+
+pub fn document_paths(c: &Connection, user_id: i64) -> DbResult<Vec<String>> {
+    let mut st = c.prepare("SELECT path FROM documents WHERE user_id = ?1")?;
+    let rows = st.query_map([user_id], |r| r.get(0))?;
+    rows.collect()
+}
+
+/// All of a user's conversations with messages, for data export.
+pub fn all_conversations(c: &Connection, user_id: i64) -> DbResult<Vec<Conversation>> {
+    let ids: Vec<i64> = list_conversations(c, user_id)?.into_iter().map(|s| s.id).collect();
+    let mut out = Vec::new();
+    for id in ids {
+        if let Some(conv) = get_conversation(c, user_id, id)? {
+            out.push(conv);
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1176,6 +1410,43 @@ mod tests {
         assert!(search(&c, uid, "trait").unwrap().is_empty());
         assert!(delete_conversation(&mut c, uid, cid).unwrap().is_some());
         assert!(get_conversation(&c, uid, cid).unwrap().is_none());
+    }
+
+    #[test]
+    fn knowledge_search_ranks_relevant_chunks() {
+        let (mut c, uid) = setup();
+        let chunks = vec![
+            "Cats sleep between 12 and 16 hours every day.".to_string(),
+            "The Rust borrow checker enforces ownership rules at compile time.".to_string(),
+            "Kittens need more sleep than adult cats.".to_string(),
+        ];
+        let doc = insert_document(&mut c, uid, "notes.md", "text/markdown", 100, "x.bin", &[], &chunks).unwrap();
+        assert_eq!(doc.chunks, 3);
+        let hits = search_knowledge(&c, uid, "How long do cats sleep?", 5).unwrap();
+        assert_eq!(hits.len(), 2);
+        assert!(hits.iter().all(|h| h.text.contains("sleep")));
+        assert_eq!(search_knowledge(&c, uid, "borrowing ownership", 5).unwrap()[0].chunk, 1, "porter stemming");
+        assert!(search_knowledge(&c, uid + 1, "cats", 5).unwrap().is_empty(), "other users can't see it");
+        assert!(search_knowledge(&c, uid, "\"* OR ( the", 5).is_ok());
+        assert_eq!(delete_document(&c, uid, doc.id).unwrap().as_deref(), Some("x.bin"));
+        assert!(search_knowledge(&c, uid, "cats", 5).unwrap().is_empty());
+    }
+
+    #[test]
+    fn memories_dedupe_and_limit() {
+        let (c, uid) = setup();
+        let a = add_memory(&c, uid, "Prefers Rust", None).unwrap().unwrap();
+        let b = add_memory(&c, uid, "prefers rust", None).unwrap().unwrap();
+        assert_eq!(a.id, b.id);
+        assert_eq!(
+            update_memory(&c, uid, a.id, "Prefers Rust and Go").unwrap().unwrap().content,
+            "Prefers Rust and Go"
+        );
+        assert!(update_memory(&c, uid + 1, a.id, "x").unwrap().is_none());
+        assert_eq!(list_memories(&c, uid).unwrap().len(), 1);
+        assert!(memory_settings(&c, uid).unwrap().enabled);
+        save_memory_settings(&c, uid, MemorySettings { enabled: false, auto_save: true }).unwrap();
+        assert_eq!(memory_settings(&c, uid).unwrap(), MemorySettings { enabled: false, auto_save: true });
     }
 
     #[test]

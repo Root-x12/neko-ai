@@ -13,6 +13,8 @@ pub enum SettingsTab {
     Appearance,
     Providers,
     Tools,
+    Memory,
+    Knowledge,
     Admin,
     Devices,
     Account,
