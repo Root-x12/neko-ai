@@ -28,6 +28,7 @@ pub fn SettingsModal() -> impl IntoView {
                 <nav class="tabs">
                     {tab_btn(SettingsTab::Appearance, "Appearance", icons::PALETTE)}
                     {tab_btn(SettingsTab::Providers, "Providers", icons::KEY)}
+                    {tab_btn(SettingsTab::Tools, "Tools", icons::WRENCH)}
                     {tab_btn(SettingsTab::Devices, "Devices", icons::DEVICE)}
                     {tab_btn(SettingsTab::Account, "Account", icons::USER)}
                 </nav>
@@ -38,6 +39,7 @@ pub fn SettingsModal() -> impl IntoView {
                     {move || match tab() {
                         Some(SettingsTab::Appearance) => view! { <Appearance /> }.into_any(),
                         Some(SettingsTab::Providers) => view! { <Providers /> }.into_any(),
+                        Some(SettingsTab::Tools) => view! { <Tools /> }.into_any(),
                         Some(SettingsTab::Devices) => view! { <Devices /> }.into_any(),
                         Some(SettingsTab::Account) => view! { <Account /> }.into_any(),
                         None => ().into_any(),
@@ -492,5 +494,383 @@ fn Account() -> impl IntoView {
             "Neko AI sends no telemetry. Your chats and keys live in the server's data folder; messages go only to the AI provider you pick."
         </p>
         <button class="btn danger-outline" on:click=move |_| ctx.sign_out()>"Sign out"</button>
+    }
+}
+
+// ---------- tools ----------
+
+fn backend_label(b: SearchBackend) -> &'static str {
+    match b {
+        SearchBackend::DuckDuckGo => "DuckDuckGo (no key, best effort)",
+        SearchBackend::Searxng => "SearXNG (self-hosted, private)",
+        SearchBackend::Brave => "Brave Search API",
+        SearchBackend::Tavily => "Tavily API",
+    }
+}
+
+#[derive(Clone, Default)]
+struct McpForm {
+    editing: Option<i64>,
+    name: String,
+    transport: Option<McpTransport>,
+    url: String,
+    command: String,
+    args: String,
+    /// "Name: value" per line. Empty while editing = keep the stored ones.
+    headers: String,
+    /// "KEY=value" per line.
+    env: String,
+    replace_secrets: bool,
+}
+
+fn parse_pairs(text: &str, sep: char) -> Vec<(String, String)> {
+    text.lines()
+        .filter_map(|l| l.split_once(sep))
+        .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
+        .filter(|(k, _)| !k.is_empty())
+        .collect()
+}
+
+fn mcp_input(
+    form: RwSignal<Option<McpForm>>,
+    label: &'static str,
+    get: fn(&McpForm) -> String,
+    set: fn(&mut McpForm, String),
+    ph: &'static str,
+) -> impl IntoView {
+    view! {
+        <label class="field">
+            <span>{label}</span>
+            <input
+                type="text"
+                placeholder=ph
+                spellcheck="false"
+                autocapitalize="none"
+                autocomplete="off"
+                prop:value=move || form.with(|f| f.as_ref().map(get).unwrap_or_default())
+                on:input=move |ev| {
+                    let v = event_target_value(&ev);
+                    form.update(|f| if let Some(f) = f { set(f, v) });
+                }
+            />
+        </label>
+    }
+}
+
+fn mcp_area(
+    form: RwSignal<Option<McpForm>>,
+    label: &'static str,
+    get: fn(&McpForm) -> String,
+    set: fn(&mut McpForm, String),
+    ph: &'static str,
+) -> impl IntoView {
+    view! {
+        <label class="field">
+            <span>{label}</span>
+            <textarea
+                rows="3"
+                placeholder=ph
+                spellcheck="false"
+                prop:value=move || form.with(|f| f.as_ref().map(get).unwrap_or_default())
+                on:input=move |ev| {
+                    let v = event_target_value(&ev);
+                    form.update(|f| if let Some(f) = f { set(f, v) });
+                }
+            ></textarea>
+        </label>
+    }
+}
+
+#[component]
+fn Tools() -> impl IntoView {
+    let ctx = expect_context::<Ctx>();
+    let search = RwSignal::new(None::<SearchSettings>);
+    let backend = RwSignal::new(SearchBackend::DuckDuckGo);
+    let base_url = RwSignal::new(String::new());
+    let key = RwSignal::new(String::new());
+    let form = RwSignal::new(None::<McpForm>);
+    let busy = RwSignal::new(false);
+    let tested = RwSignal::new(None::<(i64, Vec<McpToolInfo>)>);
+    let is_admin = move || ctx.user.with(|u| u.role == Role::Admin);
+
+    spawn_local(async move {
+        if let Ok(s) = api::get::<SearchSettings>("/tools/search").await {
+            backend.set(s.backend);
+            base_url.set(s.base_url.clone());
+            search.set(Some(s));
+        }
+    });
+    ctx.load_mcp_servers();
+
+    let save_search = move |ev: leptos::ev::SubmitEvent| {
+        ev.prevent_default();
+        let input = SearchSettingsInput {
+            backend: backend.get_untracked(),
+            base_url: base_url.get_untracked(),
+            api_key: Some(key.get_untracked()).filter(|k| !k.trim().is_empty()),
+        };
+        spawn_local(async move {
+            match api::send::<_, SearchSettings>("PUT", "/tools/search", &input).await {
+                Ok(s) => {
+                    search.set(Some(s));
+                    key.set(String::new());
+                    ctx.notify("Search settings saved", false);
+                }
+                Err(e) => ctx.error(e),
+            }
+        });
+    };
+
+    let save_mcp = move |ev: leptos::ev::SubmitEvent| {
+        ev.prevent_default();
+        let Some(f) = form.get_untracked() else { return };
+        let keep = f.editing.is_some() && !f.replace_secrets;
+        let input = McpServerInput {
+            name: f.name.clone(),
+            transport: f.transport.unwrap_or(McpTransport::Http),
+            url: f.url.clone(),
+            command: f.command.clone(),
+            args: f.args.lines().map(str::to_string).collect(),
+            headers: (!keep).then(|| parse_pairs(&f.headers, ':')),
+            env: (!keep).then(|| parse_pairs(&f.env, '=')),
+            enabled: true,
+        };
+        busy.set(true);
+        spawn_local(async move {
+            let result = match f.editing {
+                Some(id) => api::send::<_, McpServer>("PUT", &format!("/mcp/{id}"), &input).await,
+                None => api::send::<_, McpServer>("POST", "/mcp", &input).await,
+            };
+            busy.set(false);
+            match result {
+                Ok(m) => {
+                    form.set(None);
+                    ctx.notify(format!("Saved {}", m.name), false);
+                    if f.editing.is_none() {
+                        ctx.set_tools(|t| t.mcp_servers.push(m.id));
+                    }
+                    ctx.load_mcp_servers();
+                }
+                Err(e) => ctx.error(e),
+            }
+        });
+    };
+
+    let test = move |id: i64| {
+        tested.set(None);
+        spawn_local(async move {
+            match api::send::<_, McpTestResult>("POST", &format!("/mcp/{id}/test"), &serde_json::json!({})).await {
+                Ok(r) => {
+                    ctx.notify(format!("{} offers {} tools", r.server_name, r.tools.len()), false);
+                    tested.set(Some((id, r.tools)));
+                }
+                Err(e) => ctx.error(e),
+            }
+        });
+    };
+
+    let remove = move |m: McpServer| {
+        if !util::confirm(&format!("Remove {}?", m.name)) {
+            return;
+        }
+        spawn_local(async move {
+            match api::call("DELETE", &format!("/mcp/{}", m.id)).await {
+                Ok(()) => ctx.load_mcp_servers(),
+                Err(e) => ctx.error(e),
+            }
+        });
+    };
+
+    let toggle = move |m: McpServer| {
+        let input = McpServerInput {
+            name: m.name.clone(),
+            transport: m.transport,
+            url: m.url.clone(),
+            command: m.command.clone(),
+            args: m.args.clone(),
+            headers: None,
+            env: None,
+            enabled: !m.enabled,
+        };
+        spawn_local(async move {
+            match api::send::<_, McpServer>("PUT", &format!("/mcp/{}", m.id), &input).await {
+                Ok(_) => ctx.load_mcp_servers(),
+                Err(e) => ctx.error(e),
+            }
+        });
+    };
+
+    let transport = move || form.with(|f| f.as_ref().and_then(|f| f.transport).unwrap_or(McpTransport::Http));
+    let editing = move || form.with(|f| f.as_ref().is_some_and(|f| f.editing.is_some()));
+    let show_secrets = move || !editing() || form.with(|f| f.as_ref().is_some_and(|f| f.replace_secrets));
+
+    view! {
+        <h3>"Tools"</h3>
+        <p class="muted">
+            "Switch tools on per chat with the wrench button next to the message box. The AI decides when to use them."
+        </p>
+
+        <form class="card inset" on:submit=save_search>
+            <h4>"Web search"</h4>
+            <label class="field">
+                <span>"Search with"</span>
+                <select
+                    prop:value=move || backend.get().as_str().to_string()
+                    on:change=move |ev| backend.set(SearchBackend::parse(&event_target_value(&ev)))
+                >
+                    {[SearchBackend::DuckDuckGo, SearchBackend::Searxng, SearchBackend::Brave, SearchBackend::Tavily]
+                        .into_iter()
+                        .map(|b| view! { <option value=b.as_str()>{backend_label(b)}</option> })
+                        .collect_view()}
+                </select>
+            </label>
+            <Show when=move || backend.get() == SearchBackend::Searxng>
+                <label class="field">
+                    <span>"SearXNG URL"</span>
+                    <input
+                        type="url"
+                        placeholder="http://localhost:8888"
+                        prop:value=move || base_url.get()
+                        on:input=move |ev| base_url.set(event_target_value(&ev))
+                    />
+                </label>
+            </Show>
+            <Show when=move || matches!(backend.get(), SearchBackend::Brave | SearchBackend::Tavily)>
+                <label class="field">
+                    <span>"API key"</span>
+                    <input
+                        type="password"
+                        autocomplete="off"
+                        placeholder=move || {
+                            search
+                                .with(|s| s.as_ref().filter(|s| s.has_key).map(|s| format!("Stored ({}). Leave empty to keep.", s.key_hint)))
+                                .unwrap_or_else(|| "Paste your key".into())
+                        }
+                        prop:value=move || key.get()
+                        on:input=move |ev| key.set(event_target_value(&ev))
+                    />
+                </label>
+            </Show>
+            <p class="muted small">
+                "Page reading (fetch) refuses private network addresses so a tricked AI can't poke around your LAN."
+            </p>
+            <div class="form-actions">
+                <button class="btn primary" type="submit">"Save"</button>
+            </div>
+        </form>
+
+        <h4>"MCP servers"</h4>
+        <p class="muted small">
+            "Plug in any Model Context Protocol server. Remote servers use Streamable HTTP; local commands (like "
+            <code>"npx @modelcontextprotocol/server-filesystem"</code> ") run on the server and are admin-only."
+        </p>
+        <div class="provider-list">
+            <Show when=move || ctx.mcp_servers.with(|l| l.is_empty()) && form.with(|f| f.is_none())>
+                <p class="muted">"No MCP servers yet."</p>
+            </Show>
+            <For each=move || ctx.mcp_servers.get() key=|m| format!("{:?}", m) let:m>
+                {
+                    let (me, md, mt) = (m.clone(), m.clone(), m.clone());
+                    let id = m.id;
+                    let target = if m.transport == McpTransport::Http { m.url.clone() } else { format!("{} {}", m.command, m.args.join(" ")) };
+                    view! {
+                        <div class="provider-row" class:disabled=!m.enabled>
+                            <div class="provider-info">
+                                <strong>{m.name.clone()} {(!m.enabled).then_some(" (off)")}</strong>
+                                <span class="muted small">
+                                    {if m.transport == McpTransport::Http { "HTTP · " } else { "Local command · " }}
+                                    {target}
+                                </span>
+                                {move || tested.get().filter(|(tid, _)| *tid == id).map(|(_, tools)| view! {
+                                    <span class="muted small tool-names">
+                                        {tools.iter().map(|t| t.name.clone()).collect::<Vec<_>>().join(" · ")}
+                                    </span>
+                                })}
+                            </div>
+                            <div class="row-actions">
+                                <button class="btn small ghost" on:click=move |_| test(id)>"Test"</button>
+                                <button class="btn small ghost" on:click=move |_| toggle(mt.clone())>
+                                    {if m.enabled { "Turn off" } else { "Turn on" }}
+                                </button>
+                                <button
+                                    class="btn small ghost"
+                                    on:click=move |_| form.set(Some(McpForm {
+                                        editing: Some(me.id),
+                                        name: me.name.clone(),
+                                        transport: Some(me.transport),
+                                        url: me.url.clone(),
+                                        command: me.command.clone(),
+                                        args: me.args.join("\n"),
+                                        ..Default::default()
+                                    }))
+                                >
+                                    "Edit"
+                                </button>
+                                <button class="btn small ghost danger" on:click=move |_| remove(md.clone())>"Remove"</button>
+                            </div>
+                        </div>
+                    }
+                }
+            </For>
+        </div>
+        <Show
+            when=move || form.with(|f| f.is_some())
+            fallback=move || view! {
+                <button class="btn primary" on:click=move |_| form.set(Some(McpForm::default()))>
+                    <Icon svg=icons::PLUS />
+                    "Add MCP server"
+                </button>
+            }
+        >
+            <form class="provider-form card inset" on:submit=save_mcp>
+                <h4>{move || if editing() { "Edit MCP server" } else { "Add MCP server" }}</h4>
+                {mcp_input(form, "Name", |f| f.name.clone(), |f, v| f.name = v, "e.g. GitHub, Files")}
+                <label class="field">
+                    <span>"Connection"</span>
+                    <select
+                        prop:value=move || transport().as_str().to_string()
+                        on:change=move |ev| {
+                            let t = McpTransport::parse(&event_target_value(&ev));
+                            form.update(|f| if let Some(f) = f { f.transport = Some(t) });
+                        }
+                    >
+                        <option value="http">"Remote URL (Streamable HTTP)"</option>
+                        <option value="stdio" disabled=move || !is_admin()>"Local command (admin only)"</option>
+                    </select>
+                </label>
+                <Show
+                    when=move || transport() == McpTransport::Http
+                    fallback=move || view! {
+                        {mcp_input(form, "Command", |f| f.command.clone(), |f, v| f.command = v, "npx")}
+                        {mcp_area(form, "Arguments (one per line)", |f| f.args.clone(), |f, v| f.args = v, "-y\n@modelcontextprotocol/server-filesystem\n/home/me/notes")}
+                        <Show when=show_secrets>
+                            {mcp_area(form, "Environment (KEY=value per line, stored encrypted)", |f| f.env.clone(), |f, v| f.env = v, "GITHUB_TOKEN=ghp_…")}
+                        </Show>
+                    }
+                >
+                    {mcp_input(form, "Server URL", |f| f.url.clone(), |f, v| f.url = v, "https://example.com/mcp")}
+                    <Show when=show_secrets>
+                        {mcp_area(form, "Headers (Name: value per line, stored encrypted)", |f| f.headers.clone(), |f, v| f.headers = v, "Authorization: Bearer …")}
+                    </Show>
+                </Show>
+                <Show when=editing>
+                    <label class="check">
+                        <input
+                            type="checkbox"
+                            prop:checked=move || form.with(|f| f.as_ref().is_some_and(|f| f.replace_secrets))
+                            on:change=move |ev| {
+                                let on = event_target_checked(&ev);
+                                form.update(|f| if let Some(f) = f { f.replace_secrets = on });
+                            }
+                        />
+                        "Replace stored headers / environment"
+                    </label>
+                </Show>
+                <div class="form-actions">
+                    <button class="btn ghost" type="button" on:click=move |_| form.set(None)>"Cancel"</button>
+                    <button class="btn primary" type="submit" disabled=move || busy.get()>"Save"</button>
+                </div>
+            </form>
+        </Show>
     }
 }

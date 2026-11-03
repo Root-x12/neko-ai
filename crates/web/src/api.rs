@@ -33,14 +33,25 @@ impl std::fmt::Display for ApiError {
 
 pub type ApiResult<T> = Result<T, ApiError>;
 
-async fn fetch(method: &str, path: &str, body: Option<String>, signal: Option<&AbortSignal>) -> ApiResult<Response> {
+enum Body {
+    None,
+    Json(String),
+    Form(web_sys::FormData),
+}
+
+async fn fetch(method: &str, path: &str, body: Body, signal: Option<&AbortSignal>) -> ApiResult<Response> {
     let init = RequestInit::new();
     init.set_method(method);
     init.set_credentials(RequestCredentials::SameOrigin);
     let headers = Headers::new().map_err(ApiError::network)?;
-    if let Some(body) = body {
-        headers.set("content-type", "application/json").map_err(ApiError::network)?;
-        init.set_body(&JsValue::from_str(&body));
+    match body {
+        Body::None => {}
+        Body::Json(body) => {
+            headers.set("content-type", "application/json").map_err(ApiError::network)?;
+            init.set_body(&JsValue::from_str(&body));
+        }
+        // The browser sets the multipart boundary itself.
+        Body::Form(form) => init.set_body(&form),
     }
     init.set_headers(&headers);
     if let Some(signal) = signal {
@@ -73,22 +84,22 @@ async fn parse<T: DeserializeOwned>(resp: Response) -> ApiResult<T> {
 }
 
 pub async fn get<T: DeserializeOwned>(path: &str) -> ApiResult<T> {
-    parse(fetch("GET", path, None, None).await?).await
+    parse(fetch("GET", path, Body::None, None).await?).await
 }
 
 pub async fn send<B: Serialize, T: DeserializeOwned>(method: &str, path: &str, body: &B) -> ApiResult<T> {
     let json = serde_json::to_string(body).expect("serializable body");
-    parse(fetch(method, path, Some(json), None).await?).await
+    parse(fetch(method, path, Body::Json(json), None).await?).await
 }
 
 /// For endpoints that answer `204 No Content`.
 pub async fn call(method: &str, path: &str) -> ApiResult<()> {
-    fetch(method, path, None, None).await.map(|_| ())
+    fetch(method, path, Body::None, None).await.map(|_| ())
 }
 
 pub async fn call_with<B: Serialize>(method: &str, path: &str, body: &B) -> ApiResult<()> {
     let json = serde_json::to_string(body).expect("serializable body");
-    fetch(method, path, Some(json), None).await.map(|_| ())
+    fetch(method, path, Body::Json(json), None).await.map(|_| ())
 }
 
 /// POSTs `body` and calls `on_event` for each streamed event until the server closes the stream
@@ -100,7 +111,7 @@ pub async fn stream<B: Serialize>(
     mut on_event: impl FnMut(StreamEvent),
 ) -> ApiResult<()> {
     let json = serde_json::to_string(body).expect("serializable body");
-    let resp = fetch("POST", path, Some(json), Some(signal)).await?;
+    let resp = fetch("POST", path, Body::Json(json), Some(signal)).await?;
     let body = resp.body().ok_or_else(|| ApiError { status: 0, message: "Empty response".into() })?;
     let reader: ReadableStreamDefaultReader = body.get_reader().unchecked_into();
     let mut parser = SseParser::new();
@@ -120,4 +131,10 @@ pub async fn stream<B: Serialize>(
         }
     }
     Ok(())
+}
+
+pub async fn upload(file: &web_sys::File) -> ApiResult<neko_shared::Attachment> {
+    let form = web_sys::FormData::new().map_err(ApiError::network)?;
+    form.append_with_blob_and_filename("file", file, &file.name()).map_err(ApiError::network)?;
+    parse(fetch("POST", "/uploads", Body::Form(form), None).await?).await
 }

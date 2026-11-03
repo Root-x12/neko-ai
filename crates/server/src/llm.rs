@@ -1,12 +1,13 @@
-//! Provider adapters. Every provider is turned into one stream of text deltas.
+//! Provider adapters. Every provider is turned into one stream of [`LlmEvent`]s (text deltas and
+//! complete tool calls), and our provider-neutral [`Turn`]s are encoded into each provider's format.
 
-use std::{pin::Pin, time::Duration};
+use std::{collections::BTreeMap, pin::Pin, time::Duration};
 
 use futures_util::{Stream, StreamExt};
-use neko_shared::{sse::SseParser, ChatParams, MsgRole, ProviderKind};
+use neko_shared::{sse::SseParser, AttachmentKind, ChatParams, ProviderKind};
 use serde_json::{json, Value};
 
-pub type TextStream = Pin<Box<dyn Stream<Item = Result<String, String>> + Send>>;
+pub type EventStream = Pin<Box<dyn Stream<Item = Result<LlmEvent, String>> + Send>>;
 
 /// Everything needed to call a provider (the key is already decrypted).
 #[derive(Clone)]
@@ -16,10 +17,63 @@ pub struct Endpoint {
     pub api_key: Option<String>,
 }
 
+/// A file sent along with a user turn.
 #[derive(Debug, Clone)]
-pub struct ChatTurn {
-    pub role: MsgRole,
+pub struct Media {
+    pub kind: AttachmentKind,
+    pub name: String,
+    pub mime: String,
+    /// Base64 bytes (images and PDFs).
+    pub b64: String,
+    /// Extracted text (PDFs and text files). Used where the provider can't read the file natively.
+    pub text: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Call {
+    pub id: String,
+    pub name: String,
+    pub arguments: Value,
+    /// Gemini "thought signature" that must be echoed back with the call.
+    pub signature: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CallResult {
+    pub id: String,
+    pub name: String,
     pub content: String,
+    pub is_error: bool,
+}
+
+#[derive(Debug, Clone)]
+pub enum Turn {
+    User { text: String, media: Vec<Media> },
+    Assistant { text: String, calls: Vec<Call> },
+    ToolResults(Vec<CallResult>),
+}
+
+impl Turn {
+    pub fn user(text: impl Into<String>) -> Self {
+        Turn::User { text: text.into(), media: Vec::new() }
+    }
+    pub fn assistant(text: impl Into<String>) -> Self {
+        Turn::Assistant { text: text.into(), calls: Vec::new() }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ToolDef {
+    pub name: String,
+    pub description: String,
+    /// JSON Schema for the arguments (an object schema).
+    pub schema: Value,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum LlmEvent {
+    Text(String),
+    Call(Call),
 }
 
 const ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -48,26 +102,64 @@ fn authed(ep: &Endpoint, req: reqwest::RequestBuilder) -> reqwest::RequestBuilde
     }
 }
 
-/// Merges consecutive turns with the same role and drops empty ones, since some providers
-/// (Anthropic, Gemini) reject anything but strictly alternating user/assistant turns.
-pub fn normalize_turns(turns: &[ChatTurn]) -> Vec<ChatTurn> {
-    let mut out: Vec<ChatTurn> = Vec::new();
-    for t in turns.iter().filter(|t| !t.content.trim().is_empty()) {
-        match out.last_mut() {
-            Some(last) if last.role == t.role => {
-                last.content.push_str("\n\n");
-                last.content.push_str(&t.content);
+/// Cleans up a conversation so every provider accepts it: drops empty turns, merges consecutive
+/// user/assistant turns, and makes sure it starts with the user.
+pub fn normalize_turns(turns: &[Turn]) -> Vec<Turn> {
+    let mut out: Vec<Turn> = Vec::new();
+    for t in turns {
+        match t {
+            Turn::User { text, media } if text.trim().is_empty() && media.is_empty() => continue,
+            Turn::Assistant { text, calls } if text.trim().is_empty() && calls.is_empty() => continue,
+            Turn::ToolResults(r) if r.is_empty() => continue,
+            _ => {}
+        }
+        match (out.last_mut(), t) {
+            (Some(Turn::User { text: a, media: am }), Turn::User { text: b, media: bm }) => {
+                join_text(a, b);
+                am.extend(bm.iter().cloned());
+            }
+            (Some(Turn::Assistant { text: a, calls: ac }), Turn::Assistant { text: b, calls: bc }) if ac.is_empty() => {
+                join_text(a, b);
+                ac.extend(bc.iter().cloned());
             }
             _ => out.push(t.clone()),
         }
     }
-    while out.first().is_some_and(|t| t.role == MsgRole::Assistant) {
+    while matches!(out.first(), Some(Turn::Assistant { .. } | Turn::ToolResults(_))) {
         out.remove(0);
     }
     out
 }
 
-pub fn build_request_body(kind: ProviderKind, model: &str, turns: &[ChatTurn], p: &ChatParams) -> Value {
+fn join_text(a: &mut String, b: &str) {
+    if b.trim().is_empty() {
+        return;
+    }
+    if !a.trim().is_empty() {
+        a.push_str("\n\n");
+    }
+    a.push_str(b);
+}
+
+fn file_as_text(m: &Media) -> String {
+    let body = m.text.as_deref().unwrap_or("(no text could be extracted)");
+    format!("[Attached file: {}]\n{}", m.name, body)
+}
+
+/// Appends a message, merging it into the previous one if the role repeats.
+fn push_merged(messages: &mut Vec<Value>, role: &str, parts_key: &str, mut parts: Vec<Value>) {
+    if let Some(last) = messages.last_mut() {
+        if last["role"] == role {
+            if let Some(arr) = last[parts_key].as_array_mut() {
+                arr.append(&mut parts);
+                return;
+            }
+        }
+    }
+    messages.push(json!({ "role": role, parts_key: parts }));
+}
+
+pub fn build_request_body(kind: ProviderKind, model: &str, turns: &[Turn], p: &ChatParams, tools: &[ToolDef]) -> Value {
     let system = p.system_prompt.trim();
     match kind {
         ProviderKind::OpenAiCompatible => {
@@ -75,7 +167,44 @@ pub fn build_request_body(kind: ProviderKind, model: &str, turns: &[ChatTurn], p
             if !system.is_empty() {
                 messages.push(json!({ "role": "system", "content": system }));
             }
-            messages.extend(turns.iter().map(|t| json!({ "role": t.role.as_str(), "content": t.content })));
+            for t in turns {
+                match t {
+                    Turn::User { text, media } if media.is_empty() => {
+                        messages.push(json!({ "role": "user", "content": text }));
+                    }
+                    Turn::User { text, media } => {
+                        let mut parts = Vec::new();
+                        for m in media {
+                            match m.kind {
+                                AttachmentKind::Image => parts.push(json!({
+                                    "type": "image_url",
+                                    "image_url": { "url": format!("data:{};base64,{}", m.mime, m.b64) }
+                                })),
+                                _ => parts.push(json!({ "type": "text", "text": file_as_text(m) })),
+                            }
+                        }
+                        if !text.trim().is_empty() {
+                            parts.push(json!({ "type": "text", "text": text }));
+                        }
+                        messages.push(json!({ "role": "user", "content": parts }));
+                    }
+                    Turn::Assistant { text, calls } => {
+                        let mut m = json!({ "role": "assistant", "content": if text.is_empty() { Value::Null } else { json!(text) } });
+                        if !calls.is_empty() {
+                            m["tool_calls"] = calls
+                                .iter()
+                                .map(|c| json!({ "id": c.id, "type": "function", "function": { "name": c.name, "arguments": c.arguments.to_string() } }))
+                                .collect();
+                        }
+                        messages.push(m);
+                    }
+                    Turn::ToolResults(results) => {
+                        for r in results {
+                            messages.push(json!({ "role": "tool", "tool_call_id": r.id, "content": r.content }));
+                        }
+                    }
+                }
+            }
             let mut body = json!({ "model": model, "messages": messages, "stream": true });
             if let Some(v) = p.temperature {
                 body["temperature"] = json!(v);
@@ -86,11 +215,59 @@ pub fn build_request_body(kind: ProviderKind, model: &str, turns: &[ChatTurn], p
             if let Some(v) = p.max_tokens {
                 body["max_tokens"] = json!(v);
             }
+            if !tools.is_empty() {
+                body["tools"] = tools
+                    .iter()
+                    .map(|t| json!({ "type": "function", "function": { "name": t.name, "description": t.description, "parameters": t.schema } }))
+                    .collect();
+            }
             body
         }
         ProviderKind::Anthropic => {
-            let messages: Vec<Value> =
-                turns.iter().map(|t| json!({ "role": t.role.as_str(), "content": t.content })).collect();
+            let mut messages: Vec<Value> = Vec::new();
+            for t in turns {
+                match t {
+                    Turn::User { text, media } => {
+                        let mut blocks = Vec::new();
+                        for m in media {
+                            blocks.push(match m.kind {
+                                AttachmentKind::Image => json!({
+                                    "type": "image",
+                                    "source": { "type": "base64", "media_type": m.mime, "data": m.b64 }
+                                }),
+                                AttachmentKind::Pdf => json!({
+                                    "type": "document",
+                                    "source": { "type": "base64", "media_type": "application/pdf", "data": m.b64 },
+                                    "title": m.name
+                                }),
+                                AttachmentKind::Text => json!({ "type": "text", "text": file_as_text(m) }),
+                            });
+                        }
+                        if !text.trim().is_empty() {
+                            blocks.push(json!({ "type": "text", "text": text }));
+                        }
+                        push_merged(&mut messages, "user", "content", blocks);
+                    }
+                    Turn::Assistant { text, calls } => {
+                        let mut blocks = Vec::new();
+                        if !text.trim().is_empty() {
+                            blocks.push(json!({ "type": "text", "text": text }));
+                        }
+                        for c in calls {
+                            blocks
+                                .push(json!({ "type": "tool_use", "id": c.id, "name": c.name, "input": c.arguments }));
+                        }
+                        push_merged(&mut messages, "assistant", "content", blocks);
+                    }
+                    Turn::ToolResults(results) => {
+                        let blocks = results
+                            .iter()
+                            .map(|r| json!({ "type": "tool_result", "tool_use_id": r.id, "content": r.content, "is_error": r.is_error }))
+                            .collect();
+                        push_merged(&mut messages, "user", "content", blocks);
+                    }
+                }
+            }
             let mut body = json!({
                 "model": model,
                 "messages": messages,
@@ -106,16 +283,59 @@ pub fn build_request_body(kind: ProviderKind, model: &str, turns: &[ChatTurn], p
             if let Some(v) = p.top_p {
                 body["top_p"] = json!(v);
             }
+            if !tools.is_empty() {
+                body["tools"] = tools
+                    .iter()
+                    .map(|t| json!({ "name": t.name, "description": t.description, "input_schema": t.schema }))
+                    .collect();
+            }
             body
         }
         ProviderKind::Gemini => {
-            let contents: Vec<Value> = turns
-                .iter()
-                .map(|t| {
-                    let role = if t.role == MsgRole::Assistant { "model" } else { "user" };
-                    json!({ "role": role, "parts": [{ "text": t.content }] })
-                })
-                .collect();
+            let mut contents: Vec<Value> = Vec::new();
+            for t in turns {
+                match t {
+                    Turn::User { text, media } => {
+                        let mut parts = Vec::new();
+                        for m in media {
+                            parts.push(match m.kind {
+                                AttachmentKind::Image | AttachmentKind::Pdf => {
+                                    json!({ "inline_data": { "mime_type": m.mime, "data": m.b64 } })
+                                }
+                                AttachmentKind::Text => json!({ "text": file_as_text(m) }),
+                            });
+                        }
+                        if !text.trim().is_empty() {
+                            parts.push(json!({ "text": text }));
+                        }
+                        push_merged(&mut contents, "user", "parts", parts);
+                    }
+                    Turn::Assistant { text, calls } => {
+                        let mut parts = Vec::new();
+                        if !text.trim().is_empty() {
+                            parts.push(json!({ "text": text }));
+                        }
+                        for c in calls {
+                            let mut part = json!({ "functionCall": { "name": c.name, "args": c.arguments } });
+                            if let Some(sig) = &c.signature {
+                                part["thoughtSignature"] = json!(sig);
+                            }
+                            parts.push(part);
+                        }
+                        push_merged(&mut contents, "model", "parts", parts);
+                    }
+                    Turn::ToolResults(results) => {
+                        let parts = results
+                            .iter()
+                            .map(|r| {
+                                let key = if r.is_error { "error" } else { "content" };
+                                json!({ "functionResponse": { "name": r.name, "response": { key: r.content } } })
+                            })
+                            .collect();
+                        push_merged(&mut contents, "user", "parts", parts);
+                    }
+                }
+            }
             let mut config = json!({});
             if let Some(v) = p.temperature {
                 config["temperature"] = json!(v);
@@ -130,58 +350,174 @@ pub fn build_request_body(kind: ProviderKind, model: &str, turns: &[ChatTurn], p
             if !system.is_empty() {
                 body["systemInstruction"] = json!({ "parts": [{ "text": system }] });
             }
+            if !tools.is_empty() {
+                let decls: Vec<Value> = tools
+                    .iter()
+                    .map(|t| json!({ "name": t.name, "description": t.description, "parametersJsonSchema": t.schema }))
+                    .collect();
+                body["tools"] = json!([{ "functionDeclarations": decls }]);
+            }
             body
         }
     }
 }
 
-/// What one SSE event from a provider means for us.
+/// What one provider SSE event produced.
 #[derive(Debug, PartialEq)]
-pub enum Chunk {
-    Text(String),
+pub enum Out {
+    Event(LlmEvent),
     Error(String),
     Done,
-    Ignore,
 }
 
-pub fn parse_event(kind: ProviderKind, event: Option<&str>, data: &str) -> Chunk {
-    if data.trim() == "[DONE]" {
-        return Chunk::Done;
+#[derive(Default, Debug)]
+struct PartialCall {
+    id: String,
+    name: String,
+    args: String,
+}
+
+impl PartialCall {
+    fn finish(self) -> Call {
+        let arguments = if self.args.trim().is_empty() {
+            json!({})
+        } else {
+            serde_json::from_str(&self.args).unwrap_or_else(|_| json!({ "_raw": self.args }))
+        };
+        let id = if self.id.is_empty() { new_call_id() } else { sanitize_id(&self.id) };
+        Call { id, name: self.name, arguments, signature: None }
     }
-    let Ok(v) = serde_json::from_str::<Value>(data) else { return Chunk::Ignore };
-    if let Some(err) = v.get("error") {
-        return Chunk::Error(error_text(err));
+}
+
+pub fn new_call_id() -> String {
+    format!("call_{}", &crate::crypto::random_token()[..16])
+}
+
+/// Tool-call ids must be `[A-Za-z0-9_-]` for Anthropic; keep provider ids when they comply.
+fn sanitize_id(id: &str) -> String {
+    let clean: String = id.chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-')).take(64).collect();
+    if clean.is_empty() {
+        new_call_id()
+    } else {
+        clean
     }
-    match kind {
-        ProviderKind::OpenAiCompatible => {
-            let text = v["choices"][0]["delta"]["content"].as_str().unwrap_or_default();
-            if text.is_empty() {
-                Chunk::Ignore
-            } else {
-                Chunk::Text(text.to_string())
+}
+
+/// Stateful decoder for one provider stream: tool-call arguments arrive in pieces.
+pub struct Decoder {
+    kind: ProviderKind,
+    partial: BTreeMap<u64, PartialCall>,
+}
+
+impl Decoder {
+    pub fn new(kind: ProviderKind) -> Self {
+        Self { kind, partial: BTreeMap::new() }
+    }
+
+    pub fn feed(&mut self, event: Option<&str>, data: &str) -> Vec<Out> {
+        if data.trim() == "[DONE]" {
+            let mut out = self.flush();
+            out.push(Out::Done);
+            return out;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(data) else { return Vec::new() };
+        if let Some(err) = v.get("error").filter(|e| !e.is_null()) {
+            return vec![Out::Error(error_text(err))];
+        }
+        let mut out = Vec::new();
+        match self.kind {
+            ProviderKind::OpenAiCompatible => {
+                let choice = &v["choices"][0];
+                if let Some(text) = choice["delta"]["content"].as_str().filter(|t| !t.is_empty()) {
+                    out.push(Out::Event(LlmEvent::Text(text.to_string())));
+                }
+                for tc in choice["delta"]["tool_calls"].as_array().into_iter().flatten() {
+                    let idx = tc["index"].as_u64().unwrap_or(self.partial.len() as u64);
+                    let p = self.partial.entry(idx).or_default();
+                    if let Some(id) = tc["id"].as_str() {
+                        p.id = id.to_string();
+                    }
+                    if let Some(name) = tc["function"]["name"].as_str() {
+                        p.name.push_str(name);
+                    }
+                    if let Some(args) = tc["function"]["arguments"].as_str() {
+                        p.args.push_str(args);
+                    }
+                }
+                if choice["finish_reason"].is_string() {
+                    out.extend(self.flush());
+                }
+            }
+            ProviderKind::Anthropic => match event.or(v["type"].as_str()) {
+                Some("content_block_start") if v["content_block"]["type"] == "tool_use" => {
+                    let idx = v["index"].as_u64().unwrap_or(0);
+                    self.partial.insert(
+                        idx,
+                        PartialCall {
+                            id: v["content_block"]["id"].as_str().unwrap_or_default().to_string(),
+                            name: v["content_block"]["name"].as_str().unwrap_or_default().to_string(),
+                            args: String::new(),
+                        },
+                    );
+                }
+                Some("content_block_delta") => {
+                    let idx = v["index"].as_u64().unwrap_or(0);
+                    match v["delta"]["type"].as_str() {
+                        Some("text_delta") => {
+                            let t = v["delta"]["text"].as_str().unwrap_or_default();
+                            if !t.is_empty() {
+                                out.push(Out::Event(LlmEvent::Text(t.to_string())));
+                            }
+                        }
+                        Some("input_json_delta") => {
+                            if let Some(p) = self.partial.get_mut(&idx) {
+                                p.args.push_str(v["delta"]["partial_json"].as_str().unwrap_or_default());
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                Some("content_block_stop") => {
+                    if let Some(p) = self.partial.remove(&v["index"].as_u64().unwrap_or(0)) {
+                        out.push(Out::Event(LlmEvent::Call(p.finish())));
+                    }
+                }
+                Some("message_stop") => {
+                    out.extend(self.flush());
+                    out.push(Out::Done);
+                }
+                Some("error") => out.push(Out::Error(error_text(&v))),
+                _ => {}
+            },
+            ProviderKind::Gemini => {
+                for part in v["candidates"][0]["content"]["parts"].as_array().into_iter().flatten() {
+                    if let Some(text) = part["text"].as_str().filter(|t| !t.is_empty()) {
+                        if part["thought"] != true {
+                            out.push(Out::Event(LlmEvent::Text(text.to_string())));
+                        }
+                    }
+                    if let Some(fc) = part.get("functionCall") {
+                        out.push(Out::Event(LlmEvent::Call(Call {
+                            id: new_call_id(),
+                            name: fc["name"].as_str().unwrap_or_default().to_string(),
+                            arguments: fc.get("args").cloned().unwrap_or_else(|| json!({})),
+                            signature: part["thoughtSignature"].as_str().map(str::to_string),
+                        })));
+                    }
+                }
+                if out.is_empty() {
+                    if let Some(reason) = v["promptFeedback"]["blockReason"].as_str() {
+                        out.push(Out::Error(format!("Gemini blocked the prompt ({reason})")));
+                    }
+                }
             }
         }
-        ProviderKind::Anthropic => match event.or(v["type"].as_str()) {
-            Some("content_block_delta") if v["delta"]["type"] == "text_delta" => {
-                Chunk::Text(v["delta"]["text"].as_str().unwrap_or_default().to_string())
-            }
-            Some("message_stop") => Chunk::Done,
-            Some("error") => Chunk::Error(error_text(&v)),
-            _ => Chunk::Ignore,
-        },
-        ProviderKind::Gemini => {
-            let text: String = v["candidates"][0]["content"]["parts"]
-                .as_array()
-                .map(|parts| parts.iter().filter_map(|p| p["text"].as_str()).collect())
-                .unwrap_or_default();
-            if !text.is_empty() {
-                return Chunk::Text(text);
-            }
-            match v["promptFeedback"]["blockReason"].as_str() {
-                Some(reason) => Chunk::Error(format!("Gemini blocked the prompt ({reason})")),
-                None => Chunk::Ignore,
-            }
-        }
+        out
+    }
+
+    /// Emits tool calls still being assembled (stream ended without an explicit stop).
+    pub fn flush(&mut self) -> Vec<Out> {
+        std::mem::take(&mut self.partial).into_values().map(|p| Out::Event(LlmEvent::Call(p.finish()))).collect()
     }
 }
 
@@ -223,14 +559,15 @@ pub async fn stream_chat(
     client: &reqwest::Client,
     ep: &Endpoint,
     model: &str,
-    turns: &[ChatTurn],
+    turns: &[Turn],
     params: &ChatParams,
-) -> Result<TextStream, String> {
+    tools: &[ToolDef],
+) -> Result<EventStream, String> {
     let turns = normalize_turns(turns);
     if turns.is_empty() {
         return Err("Nothing to send".into());
     }
-    let body = build_request_body(ep.kind, model, &turns, params);
+    let body = build_request_body(ep.kind, model, &turns, params, tools);
     let target = match ep.kind {
         ProviderKind::OpenAiCompatible => url(&ep.base_url, "chat/completions"),
         ProviderKind::Anthropic => url(&ep.base_url, "v1/messages"),
@@ -250,45 +587,47 @@ pub async fn stream_chat(
 
     let kind = ep.kind;
     let mut bytes = resp.bytes_stream();
-    let stream = async_stream(move |tx| async move {
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<Result<LlmEvent, String>>(64);
+    tokio::spawn(async move {
         let mut parser = SseParser::new();
+        let mut decoder = Decoder::new(kind);
+        // Returns false when the stream is over (done, error, or nobody listening).
+        async fn forward(tx: &tokio::sync::mpsc::Sender<Result<LlmEvent, String>>, outs: Vec<Out>) -> bool {
+            for o in outs {
+                let keep_going = match o {
+                    Out::Event(e) => tx.send(Ok(e)).await.is_ok(),
+                    Out::Error(e) => {
+                        let _ = tx.send(Err(e)).await;
+                        false
+                    }
+                    Out::Done => false,
+                };
+                if !keep_going {
+                    return false;
+                }
+            }
+            true
+        }
         while let Some(chunk) = bytes.next().await {
             let chunk = match chunk {
                 Ok(c) => c,
-                Err(e) => return tx.send(Err(format!("Stream interrupted: {e}"))).await,
+                Err(e) => {
+                    let _ = tx.send(Err(format!("Stream interrupted: {e}"))).await;
+                    return;
+                }
             };
             for ev in parser.push(&chunk) {
-                match parse_event(kind, ev.event.as_deref(), &ev.data) {
-                    Chunk::Text(t) => tx.send(Ok(t)).await?,
-                    Chunk::Error(e) => return tx.send(Err(e)).await,
-                    Chunk::Done => return Ok(()),
-                    Chunk::Ignore => {}
+                let outs = decoder.feed(ev.event.as_deref(), &ev.data);
+                if !forward(&tx, outs).await {
+                    return;
                 }
             }
         }
-        if let Some(ev) = parser.finish() {
-            match parse_event(kind, ev.event.as_deref(), &ev.data) {
-                Chunk::Text(t) => tx.send(Ok(t)).await?,
-                Chunk::Error(e) => tx.send(Err(e)).await?,
-                _ => {}
-            }
-        }
-        Ok(())
+        let mut outs = parser.finish().map(|ev| decoder.feed(ev.event.as_deref(), &ev.data)).unwrap_or_default();
+        outs.extend(decoder.flush());
+        forward(&tx, outs).await;
     });
-    Ok(stream)
-}
-
-/// Small channel-backed stream builder (avoids pulling in an extra macro crate).
-fn async_stream<F, Fut>(f: F) -> TextStream
-where
-    F: FnOnce(tokio::sync::mpsc::Sender<Result<String, String>>) -> Fut,
-    Fut: std::future::Future<Output = Result<(), tokio::sync::mpsc::error::SendError<Result<String, String>>>>
-        + Send
-        + 'static,
-{
-    let (tx, mut rx) = tokio::sync::mpsc::channel(64);
-    tokio::spawn(f(tx));
-    Box::pin(futures_util::stream::poll_fn(move |cx| rx.poll_recv(cx)))
+    Ok(Box::pin(futures_util::stream::poll_fn(move |cx| rx.poll_recv(cx))))
 }
 
 pub async fn list_models(client: &reqwest::Client, ep: &Endpoint) -> Result<Vec<String>, String> {
@@ -340,75 +679,217 @@ pub fn parse_model_list(kind: ProviderKind, v: &Value) -> Vec<String> {
 mod tests {
     use super::*;
 
-    fn turn(role: MsgRole, s: &str) -> ChatTurn {
-        ChatTurn { role, content: s.into() }
+    fn image() -> Media {
+        Media {
+            kind: AttachmentKind::Image,
+            name: "cat.png".into(),
+            mime: "image/png".into(),
+            b64: "AAAA".into(),
+            text: None,
+        }
+    }
+
+    fn pdf() -> Media {
+        Media {
+            kind: AttachmentKind::Pdf,
+            name: "doc.pdf".into(),
+            mime: "application/pdf".into(),
+            b64: "JVBE".into(),
+            text: Some("pdf words".into()),
+        }
+    }
+
+    fn call() -> Call {
+        Call {
+            id: "call_1".into(),
+            name: "web_search".into(),
+            arguments: json!({"query": "cats"}),
+            signature: Some("sig".into()),
+        }
+    }
+
+    fn tool_round() -> Vec<Turn> {
+        vec![
+            Turn::User { text: "look".into(), media: vec![image(), pdf()] },
+            Turn::Assistant { text: "Searching".into(), calls: vec![call()] },
+            Turn::ToolResults(vec![CallResult {
+                id: "call_1".into(),
+                name: "web_search".into(),
+                content: "found".into(),
+                is_error: false,
+            }]),
+        ]
+    }
+
+    fn tools() -> Vec<ToolDef> {
+        vec![ToolDef { name: "web_search".into(), description: "Search".into(), schema: json!({"type":"object"}) }]
     }
 
     #[test]
     fn normalizes_turns() {
         let t = normalize_turns(&[
-            turn(MsgRole::Assistant, "hi"),
-            turn(MsgRole::User, "a"),
-            turn(MsgRole::User, "b"),
-            turn(MsgRole::Assistant, "  "),
-            turn(MsgRole::User, "c"),
+            Turn::assistant("hi"),
+            Turn::user("a"),
+            Turn::user("b"),
+            Turn::assistant("  "),
+            Turn::user("c"),
         ]);
         assert_eq!(t.len(), 1);
-        assert_eq!(t[0].content, "a\n\nb\n\nc");
+        assert!(matches!(&t[0], Turn::User { text, .. } if text == "a\n\nb\n\nc"));
     }
 
     #[test]
     fn builds_bodies() {
-        let turns = [turn(MsgRole::User, "hello")];
+        let turns = [Turn::user("hello")];
         let p =
             ChatParams { system_prompt: "be cute".into(), temperature: Some(1.5), top_p: None, max_tokens: Some(100) };
-        let o = build_request_body(ProviderKind::OpenAiCompatible, "gpt", &turns, &p);
+        let o = build_request_body(ProviderKind::OpenAiCompatible, "gpt", &turns, &p, &[]);
         assert_eq!(o["messages"][0]["role"], "system");
         assert_eq!(o["max_tokens"], 100);
-        assert!(o.get("top_p").is_none());
-        let a = build_request_body(ProviderKind::Anthropic, "claude", &turns, &p);
+        assert!(o.get("top_p").is_none() && o.get("tools").is_none());
+        let a = build_request_body(ProviderKind::Anthropic, "claude", &turns, &p, &[]);
         assert_eq!(a["system"], "be cute");
         assert_eq!(a["temperature"], 1.0);
-        let g = build_request_body(ProviderKind::Gemini, "gemini", &turns, &p);
+        let g = build_request_body(ProviderKind::Gemini, "gemini", &turns, &p, &[]);
         assert_eq!(g["systemInstruction"]["parts"][0]["text"], "be cute");
         assert_eq!(g["generationConfig"]["maxOutputTokens"], 100);
-        let none = build_request_body(ProviderKind::Anthropic, "c", &turns, &ChatParams::default());
+        let none = build_request_body(ProviderKind::Anthropic, "c", &turns, &ChatParams::default(), &[]);
         assert_eq!(none["max_tokens"], ANTHROPIC_DEFAULT_MAX_TOKENS);
     }
 
     #[test]
-    fn parses_provider_events() {
+    fn encodes_tools_and_media_openai() {
+        let b =
+            build_request_body(ProviderKind::OpenAiCompatible, "m", &tool_round(), &ChatParams::default(), &tools());
+        let m = &b["messages"];
+        assert_eq!(m[0]["content"][0]["type"], "image_url");
+        assert!(m[0]["content"][0]["image_url"]["url"].as_str().unwrap().starts_with("data:image/png;base64,"));
+        assert!(m[0]["content"][1]["text"].as_str().unwrap().contains("pdf words"));
+        assert_eq!(m[1]["tool_calls"][0]["function"]["arguments"], "{\"query\":\"cats\"}");
+        assert_eq!(m[2]["role"], "tool");
+        assert_eq!(m[2]["tool_call_id"], "call_1");
+        assert_eq!(b["tools"][0]["function"]["name"], "web_search");
+    }
+
+    #[test]
+    fn encodes_tools_and_media_anthropic() {
+        let mut turns = tool_round();
+        turns.push(Turn::user("thanks"));
+        let b = build_request_body(ProviderKind::Anthropic, "m", &turns, &ChatParams::default(), &tools());
+        let m = b["messages"].as_array().unwrap();
+        assert_eq!(m.len(), 3, "tool results and the next user text share one user message");
+        assert_eq!(m[0]["content"][0]["type"], "image");
+        assert_eq!(m[0]["content"][1]["type"], "document");
+        assert_eq!(m[1]["content"][1]["type"], "tool_use");
+        assert_eq!(m[1]["content"][1]["input"]["query"], "cats");
+        assert_eq!(m[2]["content"][0]["type"], "tool_result");
+        assert_eq!(m[2]["content"][1]["text"], "thanks");
+        assert_eq!(b["tools"][0]["input_schema"]["type"], "object");
+    }
+
+    #[test]
+    fn encodes_tools_and_media_gemini() {
+        let b = build_request_body(ProviderKind::Gemini, "m", &tool_round(), &ChatParams::default(), &tools());
+        let c = &b["contents"];
+        assert_eq!(c[0]["parts"][0]["inline_data"]["mime_type"], "image/png");
+        assert_eq!(c[0]["parts"][1]["inline_data"]["mime_type"], "application/pdf");
+        assert_eq!(c[1]["role"], "model");
+        assert_eq!(c[1]["parts"][1]["functionCall"]["name"], "web_search");
+        assert_eq!(c[1]["parts"][1]["thoughtSignature"], "sig");
+        assert_eq!(c[2]["parts"][0]["functionResponse"]["response"]["content"], "found");
+        assert_eq!(b["tools"][0]["functionDeclarations"][0]["parametersJsonSchema"]["type"], "object");
+    }
+
+    fn events(kind: ProviderKind, items: &[(Option<&str>, &str)]) -> Vec<Out> {
+        let mut d = Decoder::new(kind);
+        let mut out: Vec<Out> = items.iter().flat_map(|(e, data)| d.feed(*e, data)).collect();
+        out.extend(d.flush());
+        out
+    }
+
+    #[test]
+    fn decodes_text_and_errors() {
         use ProviderKind::*;
         assert_eq!(
-            parse_event(OpenAiCompatible, None, r#"{"choices":[{"delta":{"content":"Hi"}}]}"#),
-            Chunk::Text("Hi".into())
-        );
-        assert_eq!(parse_event(OpenAiCompatible, None, "[DONE]"), Chunk::Done);
-        assert_eq!(
-            parse_event(OpenAiCompatible, None, r#"{"choices":[{"delta":{"role":"assistant"}}]}"#),
-            Chunk::Ignore
+            events(OpenAiCompatible, &[(None, r#"{"choices":[{"delta":{"content":"Hi"}}]}"#), (None, "[DONE]")]),
+            vec![Out::Event(LlmEvent::Text("Hi".into())), Out::Done]
         );
         assert_eq!(
-            parse_event(
+            events(
                 Anthropic,
-                Some("content_block_delta"),
-                r#"{"type":"content_block_delta","delta":{"type":"text_delta","text":"Yo"}}"#
+                &[(Some("error"), r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#)]
             ),
-            Chunk::Text("Yo".into())
+            vec![Out::Error("Overloaded".into())]
         );
         assert_eq!(
-            parse_event(
-                Anthropic,
-                Some("error"),
-                r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#
-            ),
-            Chunk::Error("Overloaded".into())
+            events(Gemini, &[(None, r#"{"candidates":[{"content":{"parts":[{"text":"A"},{"text":"B"}]}}]}"#)]),
+            vec![Out::Event(LlmEvent::Text("A".into())), Out::Event(LlmEvent::Text("B".into()))]
         );
-        assert_eq!(parse_event(Anthropic, Some("message_stop"), r#"{"type":"message_stop"}"#), Chunk::Done);
+    }
+
+    #[test]
+    fn decodes_openai_tool_calls_in_pieces() {
+        let out = events(
+            ProviderKind::OpenAiCompatible,
+            &[
+                (
+                    None,
+                    r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_abc","function":{"name":"web_search","arguments":"{\"qu"}}]}}]}"#,
+                ),
+                (
+                    None,
+                    r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"ery\":\"cats\"}"}}]}}]}"#,
+                ),
+                (None, r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#),
+                (None, "[DONE]"),
+            ],
+        );
+        let Out::Event(LlmEvent::Call(c)) = &out[0] else { panic!("{out:?}") };
         assert_eq!(
-            parse_event(Gemini, None, r#"{"candidates":[{"content":{"parts":[{"text":"A"},{"text":"B"}]}}]}"#),
-            Chunk::Text("AB".into())
+            (c.id.as_str(), c.name.as_str(), &c.arguments),
+            ("call_abc", "web_search", &json!({"query":"cats"}))
         );
+        assert_eq!(out[1], Out::Done);
+    }
+
+    #[test]
+    fn decodes_anthropic_tool_use() {
+        let out = events(
+            ProviderKind::Anthropic,
+            &[
+                (
+                    Some("content_block_start"),
+                    r#"{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_1","name":"fetch_url"}}"#,
+                ),
+                (
+                    Some("content_block_delta"),
+                    r#"{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"url\":"}}"#,
+                ),
+                (
+                    Some("content_block_delta"),
+                    r#"{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"\"https://x.dev\"}"}}"#,
+                ),
+                (Some("content_block_stop"), r#"{"type":"content_block_stop","index":1}"#),
+                (Some("message_stop"), r#"{"type":"message_stop"}"#),
+            ],
+        );
+        let Out::Event(LlmEvent::Call(c)) = &out[0] else { panic!("{out:?}") };
+        assert_eq!(c.id, "toolu_1");
+        assert_eq!(c.arguments["url"], "https://x.dev");
+    }
+
+    #[test]
+    fn decodes_gemini_function_call_with_signature() {
+        let out = events(
+            ProviderKind::Gemini,
+            &[(
+                None,
+                r#"{"candidates":[{"content":{"parts":[{"functionCall":{"name":"web_search","args":{"query":"q"}},"thoughtSignature":"abc"}]}}]}"#,
+            )],
+        );
+        let Out::Event(LlmEvent::Call(c)) = &out[0] else { panic!("{out:?}") };
+        assert_eq!(c.signature.as_deref(), Some("abc"));
+        assert!(c.id.starts_with("call_"));
     }
 
     #[test]

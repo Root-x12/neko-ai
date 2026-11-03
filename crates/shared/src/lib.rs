@@ -251,6 +251,58 @@ pub struct Message {
     /// Set when generation failed; `content` then holds whatever arrived before the error.
     pub error: Option<String>,
     pub created_at: i64,
+    /// Files attached to a user message.
+    #[serde(default)]
+    pub attachments: Vec<Attachment>,
+    /// Tools the assistant used while writing this answer, in order.
+    #[serde(default)]
+    pub tool_calls: Vec<ToolCall>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AttachmentKind {
+    Image,
+    Pdf,
+    Text,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Attachment {
+    pub id: i64,
+    pub name: String,
+    pub mime: String,
+    pub kind: AttachmentKind,
+    pub size: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ToolCall {
+    pub id: String,
+    /// Name the model used, e.g. `web_search` or `mcp3__read_file`.
+    pub name: String,
+    /// Human-friendly label, e.g. "Web search" or "files › read_file".
+    pub label: String,
+    /// JSON arguments as sent by the model.
+    pub arguments: String,
+    /// Result text (may be truncated for display). Empty while running.
+    #[serde(default)]
+    pub result: String,
+    #[serde(default)]
+    pub is_error: bool,
+    #[serde(default)]
+    pub done: bool,
+}
+
+/// Which tools the model may use for one request.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ToolSelection {
+    #[serde(default)]
+    pub web_search: bool,
+    #[serde(default)]
+    pub fetch_url: bool,
+    #[serde(default)]
+    pub mcp_servers: Vec<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -294,6 +346,11 @@ pub struct SendMessage {
     /// Edit-and-resend: delete this message and everything after it before sending.
     #[serde(default)]
     pub replace_from: Option<i64>,
+    /// Ids returned by `POST /api/uploads`.
+    #[serde(default)]
+    pub attachments: Vec<i64>,
+    #[serde(default)]
+    pub tools: ToolSelection,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -302,6 +359,8 @@ pub struct Regenerate {
     pub model: String,
     #[serde(default)]
     pub params: ChatParams,
+    #[serde(default)]
+    pub tools: ToolSelection,
 }
 
 /// Events streamed (as SSE `data:` JSON) while the assistant answers.
@@ -316,6 +375,14 @@ pub enum StreamEvent {
     },
     Delta {
         text: String,
+    },
+    /// The model started a tool; `call.done` is false.
+    ToolStart {
+        call: ToolCall,
+    },
+    /// A tool finished; `call` carries the result.
+    ToolEnd {
+        call: ToolCall,
     },
     Done {
         message: Message,
@@ -356,4 +423,136 @@ pub struct DevicesInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiError {
     pub error: String,
+}
+
+// ---------- tools settings ----------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SearchBackend {
+    /// No key needed; scrapes DuckDuckGo's HTML page (best effort).
+    #[default]
+    DuckDuckGo,
+    /// Your own SearXNG instance (JSON format must be enabled).
+    Searxng,
+    Brave,
+    Tavily,
+}
+
+impl SearchBackend {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SearchBackend::DuckDuckGo => "duck_duck_go",
+            SearchBackend::Searxng => "searxng",
+            SearchBackend::Brave => "brave",
+            SearchBackend::Tavily => "tavily",
+        }
+    }
+
+    pub fn parse(s: &str) -> SearchBackend {
+        match s {
+            "searxng" => SearchBackend::Searxng,
+            "brave" => SearchBackend::Brave,
+            "tavily" => SearchBackend::Tavily,
+            _ => SearchBackend::DuckDuckGo,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct SearchSettings {
+    pub backend: SearchBackend,
+    /// SearXNG instance URL.
+    #[serde(default)]
+    pub base_url: String,
+    #[serde(default)]
+    pub has_key: bool,
+    #[serde(default)]
+    pub key_hint: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchSettingsInput {
+    pub backend: SearchBackend,
+    #[serde(default)]
+    pub base_url: String,
+    /// `None` keeps the stored key; `Some("")` removes it.
+    #[serde(default)]
+    pub api_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum McpTransport {
+    /// Streamable HTTP (remote or local URL).
+    Http,
+    /// A local command speaking MCP over stdin/stdout. Admin only: it runs on the server.
+    Stdio,
+}
+
+impl McpTransport {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            McpTransport::Http => "http",
+            McpTransport::Stdio => "stdio",
+        }
+    }
+
+    pub fn parse(s: &str) -> McpTransport {
+        if s == "stdio" {
+            McpTransport::Stdio
+        } else {
+            McpTransport::Http
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct McpServer {
+    pub id: i64,
+    pub name: String,
+    pub transport: McpTransport,
+    pub url: String,
+    pub command: String,
+    pub args: Vec<String>,
+    /// Names only; values (often secrets) never leave the server.
+    pub header_names: Vec<String>,
+    pub env_names: Vec<String>,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpServerInput {
+    pub name: String,
+    pub transport: McpTransport,
+    #[serde(default)]
+    pub url: String,
+    #[serde(default)]
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// `None` keeps stored headers; `Some(list)` replaces them.
+    #[serde(default)]
+    pub headers: Option<Vec<(String, String)>>,
+    /// `None` keeps stored env vars; `Some(list)` replaces them.
+    #[serde(default)]
+    pub env: Option<Vec<(String, String)>>,
+    #[serde(default = "yes")]
+    pub enabled: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct McpToolInfo {
+    pub name: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct McpTestResult {
+    pub server_name: String,
+    pub tools: Vec<McpToolInfo>,
 }

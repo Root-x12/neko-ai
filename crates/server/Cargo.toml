@@ -16,8 +16,8 @@ path = "src/main.rs"
 neko-shared = { path = "../shared" }
 serde.workspace = true
 serde_json.workspace = true
-axum = "0.8"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "signal", "time", "fs"] }
+axum = { version = "0.8", features = ["multipart"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "signal", "time", "fs", "process", "io-util"] }
 tower-http = { version = "0.6", features = ["fs", "set-header", "compression-gzip", "trace"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "http2", "rustls-tls-webpki-roots", "rustls-tls-native-roots"] }
 futures-util = "0.3"
@@ -30,10 +30,14 @@ hex = "0.4"
 base64 = "0.22"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 anyhow = "1"
+scraper = "0.29"
+pdf-extract = "0.12"
+url = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart"] }
 tokio = { version = "1", features = ["full"] }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"

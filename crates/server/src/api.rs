@@ -1,32 +1,23 @@
 //! JSON + SSE API under `/api`.
 
-use std::{convert::Infallible, time::Duration};
-
 use axum::{
-    extract::{Path, Query, State},
-    http::{header, HeaderMap, StatusCode},
-    response::{
-        sse::{Event, KeepAlive, Sse},
-        IntoResponse, Response,
-    },
-    routing::{delete, get, post},
+    extract::{DefaultBodyLimit, Path, Query, State},
+    http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode},
+    response::{IntoResponse, Response},
+    routing::{delete, get, post, put},
     Json, Router,
 };
-use futures_util::{Stream, StreamExt};
 use neko_shared::*;
 use serde::Deserialize;
 
 use crate::{
     auth::{self, AuthUser},
-    crypto, db, devices,
+    chat, crypto, db, devices,
     error::{AppError, AppResult},
-    llm::{self, ChatTurn, Endpoint},
-    AppState,
+    llm::{self, Endpoint},
+    uploads, AppState,
 };
 
-const MAX_MESSAGE_CHARS: usize = 200_000;
-/// Error marker for answers the user stopped; their partial text is still sent as context.
-const STOPPED: &str = "Stopped";
 const MAX_LOGIN_FAILURES: u32 = 5;
 const LOGIN_LOCKOUT_SECS: i64 = 60;
 
@@ -44,8 +35,14 @@ pub fn routes() -> Router<AppState> {
         .route("/providers/{id}/models", get(provider_models))
         .route("/conversations", get(list_conversations).post(create_conversation))
         .route("/conversations/{id}", get(get_conversation).patch(patch_conversation).delete(delete_conversation))
-        .route("/conversations/{id}/messages", post(send_message))
-        .route("/conversations/{id}/regenerate", post(regenerate))
+        .route("/conversations/{id}/messages", post(chat::send_message))
+        .route("/conversations/{id}/regenerate", post(chat::regenerate))
+        .route("/uploads", post(uploads::upload).layer(DefaultBodyLimit::max(uploads::MAX_UPLOAD + 64 * 1024)))
+        .route("/uploads/{id}", get(uploads::download).delete(uploads::remove))
+        .route("/tools/search", get(get_search_settings).put(put_search_settings))
+        .route("/mcp", get(list_mcp).post(create_mcp))
+        .route("/mcp/{id}", put(update_mcp).delete(delete_mcp))
+        .route("/mcp/{id}/test", post(test_mcp))
         .route("/search", get(search))
         .route("/devices", get(devices_info))
         .route("/devices/{id}", delete(revoke_device))
@@ -294,7 +291,7 @@ async fn delete_provider(State(s): State<AppState>, a: AuthUser, Path(id): Path<
     }
 }
 
-async fn endpoint_for(s: &AppState, user_id: i64, provider_id: i64) -> AppResult<Endpoint> {
+pub(crate) async fn endpoint_for(s: &AppState, user_id: i64, provider_id: i64) -> AppResult<Endpoint> {
     let rec =
         s.db.call(move |c| db::get_provider(c, user_id, provider_id))
             .await?
@@ -324,7 +321,7 @@ struct NewConversation {
     title: Option<String>,
 }
 
-const DEFAULT_TITLE: &str = "New chat";
+pub(crate) const DEFAULT_TITLE: &str = "New chat";
 
 async fn create_conversation(
     State(s): State<AppState>,
@@ -358,11 +355,11 @@ async fn get_conversation(
         .ok_or_else(|| AppError::not_found("Conversation"))
 }
 
-fn clean_title(t: &str) -> String {
+pub(crate) fn clean_title(t: &str) -> String {
     t.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(120).collect()
 }
 
-fn validate_params(p: &ChatParams) -> AppResult<()> {
+pub(crate) fn validate_params(p: &ChatParams) -> AppResult<()> {
     if p.temperature.is_some_and(|t| !(0.0..=2.0).contains(&t)) {
         return Err(AppError::bad_request("Temperature must be between 0 and 2"));
     }
@@ -417,10 +414,12 @@ async fn patch_conversation(
 }
 
 async fn delete_conversation(State(s): State<AppState>, a: AuthUser, Path(id): Path<i64>) -> AppResult<StatusCode> {
-    if s.db.call(move |c| db::delete_conversation(c, a.user.id, id)).await? {
-        Ok(no_content())
-    } else {
-        Err(AppError::not_found("Conversation"))
+    match s.db.call(move |c| db::delete_conversation(c, a.user.id, id)).await? {
+        Some(paths) => {
+            uploads::remove_files(&s.config.data_dir, paths).await;
+            Ok(no_content())
+        }
+        None => Err(AppError::not_found("Conversation")),
     }
 }
 
@@ -439,168 +438,6 @@ async fn search(
         return Ok(Json(Vec::new()));
     }
     Ok(Json(s.db.call(move |c| db::search(c, a.user.id, &q)).await?))
-}
-
-// ---------- chat streaming ----------
-
-async fn send_message(
-    State(s): State<AppState>,
-    a: AuthUser,
-    Path(conv_id): Path<i64>,
-    Json(req): Json<SendMessage>,
-) -> AppResult<Response> {
-    let content = req.content.trim().to_string();
-    if content.is_empty() {
-        return Err(AppError::bad_request("Message is empty"));
-    }
-    if content.chars().count() > MAX_MESSAGE_CHARS {
-        return Err(AppError::bad_request("Message is too long"));
-    }
-    generate(s, a.user.id, conv_id, req.provider_id, req.model, req.params, Some((content, req.replace_from))).await
-}
-
-async fn regenerate(
-    State(s): State<AppState>,
-    a: AuthUser,
-    Path(conv_id): Path<i64>,
-    Json(req): Json<Regenerate>,
-) -> AppResult<Response> {
-    generate(s, a.user.id, conv_id, req.provider_id, req.model, req.params, None).await
-}
-
-/// Stores the user's message (if any), then streams the assistant's answer as SSE while saving it.
-///
-/// Generation runs in its own task: if the client disconnects (stop button, closed tab) the task
-/// notices on the next chunk, stops calling the provider and saves what it has so far.
-async fn generate(
-    s: AppState,
-    uid: i64,
-    conv_id: i64,
-    provider_id: i64,
-    model: String,
-    params: ChatParams,
-    new_message: Option<(String, Option<i64>)>,
-) -> AppResult<Response> {
-    let model = model.trim().to_string();
-    if model.is_empty() {
-        return Err(AppError::bad_request("Pick a model first"));
-    }
-    validate_params(&params)?;
-    let ep = endpoint_for(&s, uid, provider_id).await?;
-
-    let (model_c, params_c) = (model.clone(), params.clone());
-    let prepared =
-        s.db.call(move |c| {
-            let tx = c.transaction()?;
-            let Some(conv) = db::get_conversation(&tx, uid, conv_id)? else { return Ok(None) };
-            let user_message = match &new_message {
-                Some((content, replace_from)) => {
-                    if let Some(from) = replace_from {
-                        db::truncate_from(&tx, uid, conv_id, *from)?;
-                    }
-                    if conv.title == DEFAULT_TITLE && conv.messages.is_empty() {
-                        db::rename_conversation(&tx, uid, conv_id, &title_from(content))?;
-                    }
-                    Some(db::insert_message(&tx, conv_id, MsgRole::User, content, None, None)?)
-                }
-                None => {
-                    // Regenerate: drop the assistant replies after the last user message.
-                    match conv.messages.iter().rposition(|m| m.role == MsgRole::User) {
-                        Some(i) => {
-                            if let Some(next) = conv.messages.get(i + 1) {
-                                db::truncate_from(&tx, uid, conv_id, next.id)?;
-                            }
-                        }
-                        None => return Ok(Some(Err("There is no message to answer yet"))),
-                    }
-                    None
-                }
-            };
-            db::set_conversation_model(&tx, uid, conv_id, provider_id, &model_c)?;
-            db::set_conversation_params(&tx, uid, conv_id, &params_c)?;
-            let history = db::get_conversation(&tx, uid, conv_id)?.map(|c| c.messages).unwrap_or_default();
-            let assistant =
-                db::insert_message(&tx, conv_id, MsgRole::Assistant, "", Some(provider_id), Some(&model_c))?;
-            tx.commit()?;
-            Ok(Some(Ok((user_message, history, assistant.id))))
-        })
-        .await?
-        .ok_or_else(|| AppError::not_found("Conversation"))?
-        .map_err(AppError::bad_request)?;
-    let (user_message, history, assistant_id) = prepared;
-
-    let turns: Vec<ChatTurn> = history
-        .into_iter()
-        .filter(|m| m.role == MsgRole::User || m.error.is_none() || m.error.as_deref() == Some(STOPPED))
-        .map(|m| ChatTurn { role: m.role, content: m.content })
-        .collect();
-
-    let (tx, rx) = tokio::sync::mpsc::channel::<StreamEvent>(128);
-    let _ = tx.try_send(StreamEvent::Start { user_message, assistant_message_id: assistant_id, model: model.clone() });
-
-    tokio::spawn(async move {
-        let mut text = String::new();
-        let mut error: Option<String> = None;
-        match llm::stream_chat(&s.http, &ep, &model, &turns, &params).await {
-            Err(e) => error = Some(e),
-            Ok(mut stream) => {
-                while let Some(item) = stream.next().await {
-                    match item {
-                        Ok(delta) => {
-                            text.push_str(&delta);
-                            if tx.send(StreamEvent::Delta { text: delta }).await.is_err() {
-                                error = Some(STOPPED.into());
-                                break;
-                            }
-                        }
-                        Err(e) => {
-                            error = Some(e);
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-        if error.is_none() && text.trim().is_empty() {
-            error = Some("The model returned an empty response".into());
-        }
-        let err_c = error.clone();
-        let saved = s.db.call(move |c| db::finish_message(c, assistant_id, &text, err_c.as_deref())).await;
-        match saved {
-            Ok(Some(message)) => {
-                if let Some(e) = error.filter(|e| e != STOPPED) {
-                    let _ = tx.send(StreamEvent::Error { message: e }).await;
-                }
-                let _ = tx.send(StreamEvent::Done { message }).await;
-            }
-            Ok(None) => {} // conversation deleted mid-stream
-            Err(e) => {
-                tracing::error!("saving assistant message: {e}");
-                let _ = tx.send(StreamEvent::Error { message: "Could not save the response".into() }).await;
-            }
-        }
-    });
-
-    let stream = event_stream(rx);
-    Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))).into_response())
-}
-
-fn event_stream(mut rx: tokio::sync::mpsc::Receiver<StreamEvent>) -> impl Stream<Item = Result<Event, Infallible>> {
-    futures_util::stream::poll_fn(move |cx| rx.poll_recv(cx))
-        .map(|ev| Ok(Event::default().data(serde_json::to_string(&ev).unwrap_or_else(|_| "{}".into()))))
-}
-
-fn title_from(content: &str) -> String {
-    let flat = clean_title(content);
-    let mut title: String = flat.chars().take(60).collect();
-    if flat.chars().count() > 60 {
-        title.push('…');
-    }
-    if title.is_empty() {
-        DEFAULT_TITLE.to_string()
-    } else {
-        title
-    }
 }
 
 // ---------- devices ----------
@@ -627,4 +464,162 @@ async fn revoke_device(State(s): State<AppState>, a: AuthUser, Path(id): Path<i6
 async fn revoke_other_devices(State(s): State<AppState>, a: AuthUser) -> AppResult<StatusCode> {
     s.db.call(move |c| db::delete_other_sessions(c, a.user.id, a.session_id)).await?;
     Ok(no_content())
+}
+
+// ---------- tools: web search settings ----------
+
+async fn get_search_settings(State(s): State<AppState>, a: AuthUser) -> AppResult<Json<SearchSettings>> {
+    Ok(Json(s.db.call(move |c| db::search_settings_record(c, a.user.id)).await?.settings))
+}
+
+async fn put_search_settings(
+    State(s): State<AppState>,
+    a: AuthUser,
+    Json(input): Json<SearchSettingsInput>,
+) -> AppResult<Json<SearchSettings>> {
+    let base_url = input.base_url.trim().trim_end_matches('/').to_string();
+    if input.backend == SearchBackend::Searxng && !(base_url.starts_with("http://") || base_url.starts_with("https://"))
+    {
+        return Err(AppError::bad_request("SearXNG URL must start with http:// or https://"));
+    }
+    let key = input.api_key.as_deref().map(|k| encrypt_key(&s, k));
+    let uid = a.user.id;
+    let settings =
+        s.db.call(move |c| {
+            db::save_search_settings(c, uid, input.backend, &base_url, key)?;
+            db::search_settings_record(c, uid)
+        })
+        .await?
+        .settings;
+    Ok(Json(settings))
+}
+
+// ---------- tools: MCP servers ----------
+
+async fn list_mcp(State(s): State<AppState>, a: AuthUser) -> AppResult<Json<Vec<McpServer>>> {
+    Ok(Json(s.db.call(move |c| db::list_mcp_servers(c, a.user.id)).await?))
+}
+
+fn seal_pairs(
+    s: &AppState,
+    pairs: Option<Vec<(String, String)>>,
+    header_names: bool,
+) -> AppResult<Option<db::SecretPairs>> {
+    let Some(pairs) = pairs else { return Ok(None) };
+    let pairs: Vec<(String, String)> = pairs
+        .into_iter()
+        .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
+        .filter(|(k, _)| !k.is_empty())
+        .collect();
+    for (k, v) in &pairs {
+        let ok = if header_names {
+            HeaderName::from_bytes(k.as_bytes()).is_ok() && HeaderValue::from_str(v).is_ok()
+        } else {
+            k.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+                && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        };
+        if !ok {
+            let what = if header_names { "header" } else { "environment variable" };
+            return Err(AppError::bad_request(format!("“{k}” is not a valid {what}")));
+        }
+    }
+    let names = pairs.iter().map(|(k, _)| k.clone()).collect();
+    let json = serde_json::to_string(&pairs).map_err(AppError::internal)?;
+    Ok(Some((s.vault.encrypt(&json), names)))
+}
+
+async fn save_mcp(s: AppState, a: AuthUser, id: Option<i64>, input: McpServerInput) -> AppResult<Json<McpServer>> {
+    let name = input.name.trim().to_string();
+    if name.is_empty() || name.chars().count() > 60 {
+        return Err(AppError::bad_request("Give the server a name (up to 60 characters)"));
+    }
+    let url = input.url.trim().to_string();
+    let command = input.command.trim().to_string();
+    match input.transport {
+        McpTransport::Http => {
+            if !(url.starts_with("http://") || url.starts_with("https://")) {
+                return Err(AppError::bad_request("Server URL must start with http:// or https://"));
+            }
+        }
+        McpTransport::Stdio => {
+            if a.user.role != Role::Admin {
+                return Err(AppError::forbidden(
+                    "Only the admin can add local-command MCP servers (they run on the server)",
+                ));
+            }
+            if command.is_empty() {
+                return Err(AppError::bad_request("Enter the command to run, e.g. npx"));
+            }
+        }
+    }
+    let args: Vec<String> = input.args.iter().map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect();
+    let headers = seal_pairs(&s, input.headers, true)?;
+    let env = seal_pairs(&s, input.env, false)?;
+    let uid = a.user.id;
+    let saved =
+        s.db.call(move |c| {
+            let Some(id) = db::save_mcp_server(
+                c,
+                uid,
+                id,
+                &name,
+                input.transport,
+                &url,
+                &command,
+                &args,
+                headers,
+                env,
+                input.enabled,
+            )?
+            else {
+                return Ok(None);
+            };
+            db::get_mcp_record(c, uid, id)
+        })
+        .await?
+        .ok_or_else(|| AppError::not_found("MCP server"))?;
+    s.mcp.forget(saved.server.id).await;
+    Ok(Json(saved.server))
+}
+
+async fn create_mcp(
+    State(s): State<AppState>,
+    a: AuthUser,
+    Json(input): Json<McpServerInput>,
+) -> AppResult<Json<McpServer>> {
+    save_mcp(s, a, None, input).await
+}
+
+async fn update_mcp(
+    State(s): State<AppState>,
+    a: AuthUser,
+    Path(id): Path<i64>,
+    Json(input): Json<McpServerInput>,
+) -> AppResult<Json<McpServer>> {
+    save_mcp(s, a, Some(id), input).await
+}
+
+async fn delete_mcp(State(s): State<AppState>, a: AuthUser, Path(id): Path<i64>) -> AppResult<StatusCode> {
+    if s.db.call(move |c| db::delete_mcp_server(c, a.user.id, id)).await? {
+        s.mcp.forget(id).await;
+        Ok(no_content())
+    } else {
+        Err(AppError::not_found("MCP server"))
+    }
+}
+
+async fn test_mcp(State(s): State<AppState>, a: AuthUser, Path(id): Path<i64>) -> AppResult<Json<McpTestResult>> {
+    let uid = a.user.id;
+    let rec =
+        s.db.call(move |c| db::get_mcp_record(c, uid, id)).await?.ok_or_else(|| AppError::not_found("MCP server"))?;
+    if rec.server.transport == McpTransport::Stdio && a.user.role != Role::Admin {
+        return Err(AppError::forbidden("Local-command MCP servers are admin-only"));
+    }
+    let cfg = rec.decrypt(&s.vault).map_err(AppError::bad_request)?;
+    s.mcp.forget(id).await;
+    let tools = s.mcp.list_tools(&s.http, &cfg).await.map_err(AppError::bad_gateway)?;
+    Ok(Json(McpTestResult {
+        server_name: cfg.name,
+        tools: tools.into_iter().map(|t| McpToolInfo { name: t.name, description: t.description }).collect(),
+    }))
 }

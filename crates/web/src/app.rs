@@ -55,6 +55,7 @@ fn Main(user: User, on_signed_out: Callback<()>) -> impl IntoView {
     provide_context(ctx);
     ctx.load_providers();
     ctx.load_conversations();
+    ctx.load_mcp_servers();
 
     Effect::new(move |_| {
         if ctx.signed_out.get() {

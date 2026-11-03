@@ -10,6 +10,9 @@ pub struct Config {
     pub allow_signup: bool,
     /// Adds the `Secure` flag to the session cookie. Turn on when serving over HTTPS.
     pub secure_cookies: bool,
+    /// Lets `fetch_url` reach private/LAN addresses. Off by default to stop prompt-injected
+    /// models from probing your network.
+    pub fetch_allow_private: bool,
 }
 
 impl Config {
@@ -23,6 +26,7 @@ impl Config {
             web_dir: PathBuf::from(env_or("NEKO_WEB_DIR", "crates/web/dist")),
             allow_signup: env_flag("NEKO_ALLOW_SIGNUP"),
             secure_cookies: env_flag("NEKO_SECURE_COOKIES"),
+            fetch_allow_private: env_flag("NEKO_FETCH_ALLOW_PRIVATE"),
         })
     }
 }
