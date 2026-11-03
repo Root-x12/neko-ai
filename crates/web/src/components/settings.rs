@@ -30,6 +30,9 @@ pub fn SettingsModal() -> impl IntoView {
                     {tab_btn(SettingsTab::Providers, "Providers", icons::KEY)}
                     {tab_btn(SettingsTab::Tools, "Tools", icons::WRENCH)}
                     {tab_btn(SettingsTab::Devices, "Devices", icons::DEVICE)}
+                    <Show when=move || ctx.user.with(|u| u.role != Role::User)>
+                        {tab_btn(SettingsTab::Admin, "Admin", icons::SHIELD)}
+                    </Show>
                     {tab_btn(SettingsTab::Account, "Account", icons::USER)}
                 </nav>
                 <section class="modal-body">
@@ -40,6 +43,7 @@ pub fn SettingsModal() -> impl IntoView {
                         Some(SettingsTab::Appearance) => view! { <Appearance /> }.into_any(),
                         Some(SettingsTab::Providers) => view! { <Providers /> }.into_any(),
                         Some(SettingsTab::Tools) => view! { <Tools /> }.into_any(),
+                        Some(SettingsTab::Admin) => view! { <crate::components::admin::AdminPanel /> }.into_any(),
                         Some(SettingsTab::Devices) => view! { <Devices /> }.into_any(),
                         Some(SettingsTab::Account) => view! { <Account /> }.into_any(),
                         None => ().into_any(),
@@ -473,7 +477,8 @@ fn Account() -> impl IntoView {
         <h3>"Account"</h3>
         <p>
             "Signed in as " <strong>{move || ctx.user.with(|u| u.username.clone())}</strong>
-            " · " {move || ctx.user.with(|u| u.role.as_str())}
+            " · " {move || ctx.user.with(|u| u.role.label())}
+            {move || ctx.info.with(|i| i.as_ref().map(|i| format!(" · {} workspace", i.workspace.name)))}
         </p>
         <form class="card inset" on:submit=change>
             <h4>"Change password"</h4>
@@ -493,6 +498,35 @@ fn Account() -> impl IntoView {
         <p class="muted small">
             "Neko AI sends no telemetry. Your chats and keys live in the server's data folder; messages go only to the AI provider you pick."
         </p>
+        {move || ctx.info.get().map(|i| {
+            let p = |g: GuardPolicy| match g {
+                GuardPolicy::Off => "off",
+                GuardPolicy::Warn => "warn before sending",
+                GuardPolicy::Redact => "redacted automatically",
+                GuardPolicy::Block => "blocked",
+            };
+            view! {
+                <ul class="privacy-list">
+                    <li class:on=i.local_only>
+                        {if i.local_only {
+                            "Local-only mode is ON: providers and MCP servers must be on this machine or your network, and web tools are off."
+                        } else {
+                            "Local-only mode is off (an admin can start the server with NEKO_LOCAL_ONLY=true)."
+                        }}
+                    </li>
+                    <li>"Secrets in messages: " {p(i.workspace.secret_policy)}</li>
+                    <li>"Personal data in messages: " {p(i.workspace.pii_policy)}</li>
+                    <li>"Prompt-injection scanning: " {if i.workspace.injection_scan { "on" } else { "off" }}</li>
+                    <li>
+                        "Chat retention: "
+                        {i.workspace.retention_days.map(|d| format!("deleted after {d} days without activity")).unwrap_or_else(|| "kept until you delete them".into())}
+                    </li>
+                    {(!i.workspace.model_allowlist.is_empty()).then(|| view! {
+                        <li>"Allowed models: " {i.workspace.model_allowlist.join(", ")}</li>
+                    })}
+                </ul>
+            }
+        })}
         <button class="btn danger-outline" on:click=move |_| ctx.sign_out()>"Sign out"</button>
     }
 }

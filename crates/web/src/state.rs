@@ -13,6 +13,7 @@ pub enum SettingsTab {
     Appearance,
     Providers,
     Tools,
+    Admin,
     Devices,
     Account,
 }
@@ -62,6 +63,22 @@ pub struct PendingFile {
 
 const TOOLS_KEY: &str = "neko.tools";
 
+/// A message the guard held back, kept so the user can redact or confirm it.
+#[derive(Clone)]
+pub struct GuardHold {
+    pub findings: Vec<Finding>,
+    /// Policy "block": sending as-is isn't possible.
+    pub blocked: bool,
+}
+
+#[derive(Clone)]
+struct GuardResend {
+    conv_id: i64,
+    body: SendMessage,
+    content: String,
+    files: Vec<PendingFile>,
+}
+
 /// What the canvas is showing.
 #[derive(Clone, PartialEq)]
 pub struct CanvasItem {
@@ -109,6 +126,9 @@ pub struct Ctx {
     pub canvas_full: RwSignal<bool>,
     /// Bumped on every open so the preview frame reloads even for the same artifact.
     pub canvas_rev: RwSignal<u32>,
+    pub guard: RwSignal<Option<GuardHold>>,
+    guard_resend: StoredValue<Option<GuardResend>>,
+    pub info: RwSignal<Option<ServerInfo>>,
 }
 
 impl Ctx {
@@ -147,6 +167,9 @@ impl Ctx {
             canvas_code: RwSignal::new(false),
             canvas_full: RwSignal::new(false),
             canvas_rev: RwSignal::new(0),
+            guard: RwSignal::new(None),
+            guard_resend: StoredValue::new(None),
+            info: RwSignal::new(None),
         }
     }
 
@@ -428,14 +451,64 @@ impl Ctx {
                 replace_from,
                 attachments,
                 tools: self.tools.get_untracked(),
+                allow_findings: false,
+                redact: false,
             };
-            let started = self.run_stream(format!("/conversations/{conv_id}/messages"), body, replace_from).await;
-            if started {
-                self.editing.set(None);
-            } else if self.draft.with_untracked(|d| d.is_empty()) {
-                // Don't lose what the user typed or attached.
-                self.draft.set(content);
-                self.pending.set(files);
+            let started =
+                self.run_stream(format!("/conversations/{conv_id}/messages"), body.clone(), replace_from).await;
+            self.after_send(started, conv_id, body, content, files);
+        });
+    }
+
+    fn after_send(self, started: bool, conv_id: i64, body: SendMessage, content: String, files: Vec<PendingFile>) {
+        if started {
+            self.editing.set(None);
+            return;
+        }
+        if self.guard.with_untracked(|g| g.is_some()) {
+            self.guard_resend.set_value(Some(GuardResend {
+                conv_id,
+                body,
+                content: content.clone(),
+                files: files.clone(),
+            }));
+        }
+        if self.draft.with_untracked(|d| d.is_empty()) {
+            // Don't lose what the user typed or attached.
+            self.draft.set(content);
+            self.pending.set(files);
+        }
+    }
+
+    /// Answer to the guard dialog: send the held message redacted, or as it is.
+    pub fn resend_guarded(self, redact: bool) {
+        self.guard.set(None);
+        let Some(mut r) = self.guard_resend.try_update_value(|v| v.take()).flatten() else { return };
+        if self.streaming.get_untracked() {
+            return;
+        }
+        r.body.redact = redact;
+        r.body.allow_findings = !redact;
+        self.streaming.set(true);
+        self.draft.set(String::new());
+        self.pending.set(Vec::new());
+        spawn_local(async move {
+            let replace_from = r.body.replace_from;
+            let started =
+                self.run_stream(format!("/conversations/{}/messages", r.conv_id), r.body.clone(), replace_from).await;
+            self.after_send(started, r.conv_id, r.body, r.content, r.files);
+        });
+    }
+
+    pub fn dismiss_guard(self) {
+        self.guard.set(None);
+        self.guard_resend.set_value(None);
+    }
+
+    pub fn load_info(self) {
+        spawn_local(async move {
+            if let Ok(i) = api::get::<ServerInfo>("/info").await {
+                self.info.set(Some(i));
             }
         });
     }
@@ -542,8 +615,12 @@ impl Ctx {
         })
         .await;
 
-        if let Err(e) = result {
-            match assistant.get() {
+        match result {
+            // Held back by the guard: the dialog explains, no error toast.
+            Err(e) if !e.findings.is_empty() => {
+                self.guard.set(Some(GuardHold { findings: e.findings.clone(), blocked: e.status == 403 }));
+            }
+            Err(e) => match assistant.get() {
                 Some(v) if e.is_abort() => v.error.set(Some("Stopped".into())),
                 Some(v) => {
                     v.error.set(Some(e.message.clone()));
@@ -551,7 +628,8 @@ impl Ctx {
                 }
                 None if e.is_abort() => {}
                 None => self.error(e),
-            }
+            },
+            Ok(()) => {}
         }
         if let Some(v) = assistant.get() {
             v.streaming.set(false);

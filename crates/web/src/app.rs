@@ -9,6 +9,7 @@ use crate::{
     components::{
         canvas::Canvas,
         chat::ChatView,
+        guard::GuardDialog,
         login::Login,
         mascot::{Backdrop, Mascot},
         params::ParamsPanel,
@@ -57,6 +58,7 @@ fn Main(user: User, on_signed_out: Callback<()>) -> impl IntoView {
     ctx.load_providers();
     ctx.load_conversations();
     ctx.load_mcp_servers();
+    ctx.load_info();
 
     Effect::new(move |_| {
         if ctx.signed_out.get() {
@@ -119,6 +121,7 @@ fn Main(user: User, on_signed_out: Callback<()>) -> impl IntoView {
             <Canvas />
             <ParamsPanel />
             <SettingsModal />
+            <GuardDialog />
             {move || ctx.toast.get().map(|t| view! {
                 <div class="toast" class:error=t.error role="status" on:click=move |_| ctx.toast.set(None)>{t.text}</div>
             })}

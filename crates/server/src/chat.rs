@@ -14,10 +14,12 @@ use futures_util::{Stream, StreamExt};
 use neko_shared::*;
 
 use crate::{
+    admin::{audit, workspace_of, ClientIp},
     api::{clean_title, endpoint_for, validate_params, DEFAULT_TITLE},
     auth::AuthUser,
     db,
     error::{AppError, AppResult},
+    guard,
     llm::{self, CallResult, LlmEvent, Turn},
     tools::{web::truncate, Toolbox},
     uploads, AppState,
@@ -34,9 +36,112 @@ const TOOL_RESULT_HISTORY: usize = 1_500;
 /// Error marker for answers the user stopped; their partial text is still sent as context.
 pub const STOPPED: &str = "Stopped";
 
+/// What the guard decided about an outgoing message.
+enum Verdict {
+    /// Send this (possibly redacted) text. `note` describes what happened, for the audit log.
+    Pass { content: String, note: Option<(&'static str, String)> },
+    /// Ask the user first (policy "warn").
+    Hold(Vec<Finding>),
+    /// Refuse (policy "block").
+    Block(Vec<Finding>),
+}
+
+fn finding(text: &str, m: &guard::Match, location: &str) -> Finding {
+    Finding {
+        kind: m.kind.to_string(),
+        secret: m.secret,
+        sample: guard::mask(&text[m.start..m.end]),
+        location: location.to_string(),
+    }
+}
+
+fn kinds(f: &[Finding]) -> String {
+    let mut k: Vec<&str> = f.iter().map(|f| f.kind.as_str()).collect();
+    k.sort_unstable();
+    k.dedup();
+    k.join(", ")
+}
+
+/// Applies the workspace's secret/PII policies to the message and its files.
+/// Text in the message can be redacted; files can't, so their findings need consent or block.
+fn check_outgoing(ws: &Workspace, content: &str, files: &[db::AttachmentRecord], allow: bool, redact: bool) -> Verdict {
+    let policy = |secret: bool| if secret { ws.secret_policy } else { ws.pii_policy };
+    let msg: Vec<guard::Match> =
+        guard::scan_sensitive(content).into_iter().filter(|m| policy(m.secret) != GuardPolicy::Off).collect();
+    let mut file_findings: Vec<(GuardPolicy, Finding)> = Vec::new();
+    for f in files {
+        let Some(text) = f.text.as_deref() else { continue };
+        for m in guard::scan_sensitive(text) {
+            let p = policy(m.secret);
+            if p != GuardPolicy::Off {
+                file_findings.push((p, finding(text, &m, &f.info.name)));
+            }
+        }
+    }
+    if msg.is_empty() && file_findings.is_empty() {
+        return Verdict::Pass { content: content.to_string(), note: None };
+    }
+
+    // Message matches that will be replaced: always under "redact", and on request otherwise.
+    let (to_redact, unresolved): (Vec<guard::Match>, Vec<guard::Match>) =
+        msg.into_iter().partition(|m| redact || policy(m.secret) == GuardPolicy::Redact);
+    let blocked: Vec<Finding> = unresolved
+        .iter()
+        .filter(|m| policy(m.secret) == GuardPolicy::Block)
+        .map(|m| finding(content, m, "message"))
+        .chain(file_findings.iter().filter(|(p, _)| *p == GuardPolicy::Block).map(|(_, f)| f.clone()))
+        .collect();
+    if !blocked.is_empty() {
+        return Verdict::Block(blocked);
+    }
+    let held: Vec<Finding> = if allow {
+        Vec::new()
+    } else {
+        unresolved
+            .iter()
+            .map(|m| finding(content, m, "message"))
+            .chain(file_findings.iter().map(|(_, f)| f.clone()))
+            .collect()
+    };
+    if !held.is_empty() {
+        return Verdict::Hold(held);
+    }
+    let redacted: Vec<Finding> = to_redact.iter().map(|m| finding(content, m, "message")).collect();
+    let allowed: Vec<Finding> = unresolved
+        .iter()
+        .map(|m| finding(content, m, "message"))
+        .chain(file_findings.into_iter().map(|(_, f)| f))
+        .collect();
+    let note = match (redacted.is_empty(), allowed.is_empty()) {
+        (false, true) => Some(("guard.redacted", kinds(&redacted))),
+        (true, false) => Some(("guard.sent_anyway", kinds(&allowed))),
+        (false, false) => Some(("guard.redacted", format!("{}; sent anyway: {}", kinds(&redacted), kinds(&allowed)))),
+        (true, true) => None,
+    };
+    Verdict::Pass { content: guard::redact(content, &to_redact), note }
+}
+
+fn findings_response(status: axum::http::StatusCode, error: &str, findings: Vec<Finding>) -> Response {
+    (status, Json(ApiError { error: error.to_string(), findings })).into_response()
+}
+
+fn check_model(ws: &Workspace, model: &str) -> AppResult<()> {
+    if guard::model_allowed(&ws.model_allowlist, model.trim()) {
+        Ok(())
+    } else {
+        Err(AppError::forbidden(format!(
+            "“{}” isn't allowed in the {} workspace. Allowed: {}",
+            model.trim(),
+            ws.name,
+            ws.model_allowlist.join(", ")
+        )))
+    }
+}
+
 pub async fn send_message(
     State(s): State<AppState>,
     a: AuthUser,
+    ip: ClientIp,
     Path(conv_id): Path<i64>,
     Json(req): Json<SendMessage>,
 ) -> AppResult<Response> {
@@ -50,17 +155,58 @@ pub async fn send_message(
     if req.attachments.len() > MAX_ATTACHMENTS {
         return Err(AppError::bad_request("At most 10 files per message"));
     }
+    let ws = workspace_of(&s, &a.user).await;
+    check_model(&ws, &req.model)?;
+    let (uid, ids) = (a.user.id, req.attachments.clone());
+    let files =
+        s.db.call(move |c| {
+            let mut out = Vec::new();
+            for id in ids {
+                if let Some(r) = db::get_attachment(c, uid, id)? {
+                    out.push(r);
+                }
+            }
+            Ok(out)
+        })
+        .await?;
+    let content = match check_outgoing(&ws, &content, &files, req.allow_findings, req.redact) {
+        Verdict::Pass { content, note } => {
+            if let Some((action, detail)) = note {
+                audit(&s, Some(&a.user), &ip.0, action, format!("chat {conv_id}"), detail).await;
+            }
+            content
+        }
+        Verdict::Hold(findings) => {
+            audit(&s, Some(&a.user), &ip.0, "guard.held", format!("chat {conv_id}"), kinds(&findings)).await;
+            return Ok(findings_response(
+                axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+                "This message contains what looks like secrets or personal data. Send it anyway, redact it, or edit it.",
+                findings,
+            ));
+        }
+        Verdict::Block(findings) => {
+            audit(&s, Some(&a.user), &ip.0, "guard.blocked", format!("chat {conv_id}"), kinds(&findings)).await;
+            return Ok(findings_response(
+                axum::http::StatusCode::FORBIDDEN,
+                "Your workspace doesn't allow sending this: it contains secrets or personal data.",
+                findings,
+            ));
+        }
+    };
     let new = NewMessage { content, replace_from: req.replace_from, attachments: req.attachments };
-    generate(s, a.user, conv_id, req.provider_id, req.model, req.params, req.tools, Some(new)).await
+    generate(s, a.user, ip.0, ws, conv_id, req.provider_id, req.model, req.params, req.tools, Some(new)).await
 }
 
 pub async fn regenerate(
     State(s): State<AppState>,
     a: AuthUser,
+    ip: ClientIp,
     Path(conv_id): Path<i64>,
     Json(req): Json<Regenerate>,
 ) -> AppResult<Response> {
-    generate(s, a.user, conv_id, req.provider_id, req.model, req.params, req.tools, None).await
+    let ws = workspace_of(&s, &a.user).await;
+    check_model(&ws, &req.model)?;
+    generate(s, a.user, ip.0, ws, conv_id, req.provider_id, req.model, req.params, req.tools, None).await
 }
 
 struct NewMessage {
@@ -75,16 +221,30 @@ async fn history_turns(
     s: &AppState,
     history: &[Message],
     files: &HashMap<i64, Vec<db::AttachmentRecord>>,
+    scan_injection: bool,
 ) -> Vec<Turn> {
     let mut turns = Vec::new();
     for m in history {
         match m.role {
             MsgRole::User => {
-                let media = match files.get(&m.id) {
-                    Some(recs) => uploads::load_media(&s.config.data_dir, recs).await,
-                    None => Vec::new(),
-                };
-                turns.push(Turn::User { text: m.content.clone(), media });
+                let recs = files.get(&m.id).map(Vec::as_slice).unwrap_or_default();
+                let mut media = uploads::load_media(&s.config.data_dir, recs).await;
+                let mut text = m.content.clone();
+                if scan_injection {
+                    // Flagged files get a warning both inside their text and in the user's turn
+                    // (images and natively-read PDFs never pass through our text).
+                    for (r, md) in recs.iter().zip(media.iter_mut()) {
+                        if r.info.flags.is_empty() {
+                            continue;
+                        }
+                        let notice = guard::injection_notice(&r.info.flags);
+                        if let Some(t) = &mut md.text {
+                            *t = format!("{notice}{t}");
+                        }
+                        text.push_str(&format!("\n\n[About the attached file “{}”: {}]", r.info.name, notice.trim()));
+                    }
+                }
+                turns.push(Turn::User { text, media });
             }
             MsgRole::Assistant => {
                 if m.error.is_some() && m.error.as_deref() != Some(STOPPED) {
@@ -118,6 +278,8 @@ async fn history_turns(
 async fn generate(
     s: AppState,
     user: User,
+    ip: String,
+    ws: Workspace,
     conv_id: i64,
     provider_id: i64,
     model: String,
@@ -189,7 +351,7 @@ async fn generate(
         .map_err(AppError::bad_request)?;
     let (user_message, history, files, assistant_id) = prepared;
 
-    let mut turns = history_turns(&s, &history, &files).await;
+    let mut turns = history_turns(&s, &history, &files, ws.injection_scan).await;
     let (toolbox, warnings) = if tool_sel == ToolSelection::default() {
         (Toolbox::empty(), Vec::new())
     } else {
@@ -213,6 +375,7 @@ async fn generate(
                 result: problem,
                 is_error: true,
                 done: true,
+                flags: Vec::new(),
             };
             let _ = tx.send(StreamEvent::ToolEnd { call: card.clone() }).await;
             log.push(card);
@@ -263,6 +426,7 @@ async fn generate(
                     result: String::new(),
                     is_error: false,
                     done: false,
+                    flags: Vec::new(),
                 };
                 if tx.send(StreamEvent::ToolStart { call: card.clone() }).await.is_err() {
                     error = Some(STOPPED.into());
@@ -280,6 +444,15 @@ async fn generate(
                         break 'steps;
                     }
                 };
+                let mut output = output;
+                if ws.injection_scan {
+                    let reasons = guard::scan_injection(&output);
+                    if !reasons.is_empty() {
+                        output = format!("{}{output}", guard::injection_notice(&reasons));
+                        audit(&s, Some(&user), &ip, "guard.injection", &card.label, reasons.join("; ")).await;
+                        card.flags = reasons;
+                    }
+                }
                 card.result = truncate(&output, TOOL_RESULT_DISPLAY);
                 card.is_error = is_error;
                 card.done = true;

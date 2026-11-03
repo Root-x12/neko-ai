@@ -33,6 +33,7 @@ anyhow = "1"
 scraper = "0.29"
 pdf-extract = "0.12"
 url = "2"
+regex = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 

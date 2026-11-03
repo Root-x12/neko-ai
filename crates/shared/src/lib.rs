@@ -9,7 +9,10 @@ pub mod sse;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
+    /// Runs the server: users, workspaces, every audit entry.
     Admin,
+    /// Manages their own workspace's policies and sees its audit log.
+    Team,
     User,
 }
 
@@ -17,6 +20,7 @@ impl Role {
     pub fn as_str(self) -> &'static str {
         match self {
             Role::Admin => "admin",
+            Role::Team => "team",
             Role::User => "user",
         }
     }
@@ -24,7 +28,16 @@ impl Role {
     pub fn parse(s: &str) -> Role {
         match s {
             "admin" => Role::Admin,
+            "team" => Role::Team,
             _ => Role::User,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Role::Admin => "Admin",
+            Role::Team => "Team lead",
+            Role::User => "User",
         }
     }
 }
@@ -34,6 +47,12 @@ pub struct User {
     pub id: i64,
     pub username: String,
     pub role: Role,
+    #[serde(default = "default_workspace")]
+    pub workspace_id: i64,
+}
+
+fn default_workspace() -> i64 {
+    1
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -274,6 +293,9 @@ pub struct Attachment {
     pub mime: String,
     pub kind: AttachmentKind,
     pub size: i64,
+    /// Prompt-injection warnings found in the file's text.
+    #[serde(default)]
+    pub flags: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -292,6 +314,9 @@ pub struct ToolCall {
     pub is_error: bool,
     #[serde(default)]
     pub done: bool,
+    /// Prompt-injection warnings found in the result.
+    #[serde(default)]
+    pub flags: Vec<String>,
 }
 
 /// Which tools the model may use for one request.
@@ -349,6 +374,12 @@ pub struct SendMessage {
     /// Ids returned by `POST /api/uploads`.
     #[serde(default)]
     pub attachments: Vec<i64>,
+    /// Send even though the guard found secrets/personal data (only under the "warn" policy).
+    #[serde(default)]
+    pub allow_findings: bool,
+    /// Replace detected secrets/personal data in the message with placeholders before sending.
+    #[serde(default)]
+    pub redact: bool,
     #[serde(default)]
     pub tools: ToolSelection,
 }
@@ -423,6 +454,138 @@ pub struct DevicesInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiError {
     pub error: String,
+    /// Present when a message was held back because it contains secrets or personal data.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub findings: Vec<Finding>,
+}
+
+// ---------- security & governance ----------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GuardPolicy {
+    Off,
+    /// Ask before sending (the user can send anyway or redact).
+    #[default]
+    Warn,
+    /// Replace matches with placeholders automatically.
+    Redact,
+    /// Refuse to send.
+    Block,
+}
+
+impl GuardPolicy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            GuardPolicy::Off => "off",
+            GuardPolicy::Warn => "warn",
+            GuardPolicy::Redact => "redact",
+            GuardPolicy::Block => "block",
+        }
+    }
+
+    pub fn parse(s: &str) -> GuardPolicy {
+        match s {
+            "off" => GuardPolicy::Off,
+            "redact" => GuardPolicy::Redact,
+            "block" => GuardPolicy::Block,
+            _ => GuardPolicy::Warn,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Finding {
+    /// e.g. "OpenAI API key", "Email address".
+    pub kind: String,
+    /// `true` for credentials, `false` for personal data.
+    pub secret: bool,
+    /// Masked excerpt, e.g. "sk-p…9Xa".
+    pub sample: String,
+    /// "message" or the attachment's file name.
+    pub location: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Workspace {
+    pub id: i64,
+    pub name: String,
+    /// Model name patterns (`*` wildcard). Empty = every model allowed.
+    pub model_allowlist: Vec<String>,
+    /// Chats untouched for this many days are deleted. `None` keeps them forever.
+    pub retention_days: Option<u32>,
+    pub secret_policy: GuardPolicy,
+    pub pii_policy: GuardPolicy,
+    /// Flag fetched pages, tool results and uploads that try to instruct the AI.
+    pub injection_scan: bool,
+    #[serde(default)]
+    pub member_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceInput {
+    pub name: String,
+    #[serde(default)]
+    pub model_allowlist: Vec<String>,
+    #[serde(default)]
+    pub retention_days: Option<u32>,
+    #[serde(default)]
+    pub secret_policy: GuardPolicy,
+    #[serde(default)]
+    pub pii_policy: GuardPolicy,
+    #[serde(default = "yes")]
+    pub injection_scan: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AdminUser {
+    pub id: i64,
+    pub username: String,
+    pub role: Role,
+    pub workspace_id: i64,
+    pub disabled: bool,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateUser {
+    pub username: String,
+    pub password: String,
+    pub role: Role,
+    pub workspace_id: i64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct UpdateUser {
+    #[serde(default)]
+    pub role: Option<Role>,
+    #[serde(default)]
+    pub workspace_id: Option<i64>,
+    #[serde(default)]
+    pub disabled: Option<bool>,
+    #[serde(default)]
+    pub password: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AuditEntry {
+    pub id: i64,
+    pub ts: i64,
+    pub username: String,
+    pub workspace_id: Option<i64>,
+    pub action: String,
+    pub target: String,
+    pub detail: String,
+    pub ip: String,
+}
+
+/// What the signed-in user's environment allows, for the UI.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ServerInfo {
+    pub version: String,
+    /// Nothing leaves the local network: only LAN/loopback providers and MCP servers, no web tools.
+    pub local_only: bool,
+    pub workspace: Workspace,
 }
 
 // ---------- tools settings ----------

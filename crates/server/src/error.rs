@@ -47,6 +47,6 @@ impl From<rusqlite::Error> for AppError {
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        (self.status, Json(ApiError { error: self.message })).into_response()
+        (self.status, Json(ApiError { error: self.message, findings: Vec::new() })).into_response()
     }
 }

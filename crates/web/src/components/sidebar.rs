@@ -146,6 +146,9 @@ pub fn Sidebar() -> impl IntoView {
                     <span class="avatar">{move || ctx.user.with(|u| u.username.chars().next().unwrap_or('?').to_uppercase().to_string())}</span>
                     <span class="user-name">{move || ctx.user.with(|u| u.username.clone())}</span>
                 </button>
+                <Show when=move || ctx.info.with(|i| i.as_ref().is_some_and(|i| i.local_only))>
+                    <span class="local-badge" title="Local-only mode: nothing leaves your network">"LOCAL"</span>
+                </Show>
                 <button class="icon-btn" aria-label="Devices" title="Connect a device" on:click=move |_| ctx.settings.set(Some(SettingsTab::Devices))>
                     <Icon svg=icons::DEVICE />
                 </button>

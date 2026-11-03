@@ -7,8 +7,9 @@ use std::{
 };
 
 use neko_shared::{
-    Attachment, AttachmentKind, ChatParams, Conversation, ConversationSummary, DeviceSession, McpServer, McpTransport,
-    Message, MsgRole, Provider, ProviderKind, Role, SearchBackend, SearchHit, SearchSettings, ToolCall, User,
+    AdminUser, Attachment, AttachmentKind, AuditEntry, ChatParams, Conversation, ConversationSummary, DeviceSession,
+    GuardPolicy, McpServer, McpTransport, Message, MsgRole, Provider, ProviderKind, Role, SearchBackend, SearchHit,
+    SearchSettings, ToolCall, UpdateUser, User, Workspace, WorkspaceInput,
 };
 use rusqlite::{params, Connection, OptionalExtension, Row};
 
@@ -126,6 +127,35 @@ CREATE TABLE mcp_servers (
     created_at   INTEGER NOT NULL
 );
 "#,
+    r#"
+CREATE TABLE workspaces (
+    id              INTEGER PRIMARY KEY,
+    name            TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    model_allowlist TEXT NOT NULL DEFAULT '[]',
+    retention_days  INTEGER,
+    secret_policy   TEXT NOT NULL DEFAULT 'warn',
+    pii_policy      TEXT NOT NULL DEFAULT 'warn',
+    injection_scan  INTEGER NOT NULL DEFAULT 1,
+    created_at      INTEGER NOT NULL
+);
+INSERT INTO workspaces (id, name, created_at) VALUES (1, 'Default', CAST(strftime('%s', 'now') AS INTEGER));
+ALTER TABLE users ADD COLUMN workspace_id INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE users ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE attachments ADD COLUMN flags TEXT NOT NULL DEFAULT '[]';
+CREATE TABLE audit_log (
+    id           INTEGER PRIMARY KEY,
+    ts           INTEGER NOT NULL,
+    user_id      INTEGER,
+    username     TEXT NOT NULL DEFAULT '',
+    workspace_id INTEGER,
+    action       TEXT NOT NULL,
+    target       TEXT NOT NULL DEFAULT '',
+    detail       TEXT NOT NULL DEFAULT '',
+    ip           TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX audit_ts ON audit_log(ts DESC);
+CREATE INDEX audit_workspace ON audit_log(workspace_id, ts DESC);
+"#,
 ];
 
 impl Db {
@@ -169,28 +199,38 @@ impl Db {
 pub struct UserRecord {
     pub user: User,
     pub password_hash: String,
+    pub disabled: bool,
 }
 
+/// Expects `id, username, role, workspace_id` as the first four columns.
 fn user_from_row(r: &Row) -> DbResult<User> {
-    Ok(User { id: r.get(0)?, username: r.get(1)?, role: Role::parse(&r.get::<_, String>(2)?) })
+    Ok(User { id: r.get(0)?, username: r.get(1)?, role: Role::parse(&r.get::<_, String>(2)?), workspace_id: r.get(3)? })
 }
 
 pub fn user_count(c: &Connection) -> DbResult<i64> {
     c.query_row("SELECT COUNT(*) FROM users", [], |r| r.get(0))
 }
 
-pub fn create_user(c: &Connection, username: &str, password_hash: &str, role: Role) -> DbResult<User> {
+pub fn create_user(
+    c: &Connection,
+    username: &str,
+    password_hash: &str,
+    role: Role,
+    workspace_id: i64,
+) -> DbResult<User> {
     c.execute(
-        "INSERT INTO users (username, password_hash, role, created_at) VALUES (?1, ?2, ?3, ?4)",
-        params![username, password_hash, role.as_str(), now()],
+        "INSERT INTO users (username, password_hash, role, workspace_id, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![username, password_hash, role.as_str(), workspace_id, now()],
     )?;
-    Ok(User { id: c.last_insert_rowid(), username: username.to_string(), role })
+    Ok(User { id: c.last_insert_rowid(), username: username.to_string(), role, workspace_id })
 }
 
 pub fn find_user_by_name(c: &Connection, username: &str) -> DbResult<Option<UserRecord>> {
-    c.query_row("SELECT id, username, role, password_hash FROM users WHERE username = ?1", [username], |r| {
-        Ok(UserRecord { user: user_from_row(r)?, password_hash: r.get(3)? })
-    })
+    c.query_row(
+        "SELECT id, username, role, workspace_id, password_hash, disabled FROM users WHERE username = ?1",
+        [username],
+        |r| Ok(UserRecord { user: user_from_row(r)?, password_hash: r.get(4)?, disabled: r.get(5)? }),
+    )
     .optional()
 }
 
@@ -217,12 +257,17 @@ pub fn session_user(c: &Connection, token_hash: &str) -> DbResult<Option<(i64, U
     let t = now();
     let found = c
         .query_row(
-            "SELECT s.id, u.id, u.username, u.role, s.last_seen FROM sessions s JOIN users u ON u.id = s.user_id
-             WHERE s.token_hash = ?1 AND s.expires_at > ?2",
+            "SELECT s.id, u.id, u.username, u.role, u.workspace_id, s.last_seen FROM sessions s JOIN users u ON u.id = s.user_id
+             WHERE s.token_hash = ?1 AND s.expires_at > ?2 AND u.disabled = 0",
             params![token_hash, t],
             |r| {
-                let user = User { id: r.get(1)?, username: r.get(2)?, role: Role::parse(&r.get::<_, String>(3)?) };
-                Ok((r.get::<_, i64>(0)?, user, r.get::<_, i64>(4)?))
+                let user = User {
+                    id: r.get(1)?,
+                    username: r.get(2)?,
+                    role: Role::parse(&r.get::<_, String>(3)?),
+                    workspace_id: r.get(4)?,
+                };
+                Ok((r.get::<_, i64>(0)?, user, r.get::<_, i64>(5)?))
             },
         )
         .optional()?;
@@ -526,7 +571,7 @@ pub struct AttachmentRecord {
     pub message_id: Option<i64>,
 }
 
-const ATTACHMENT_COLS: &str = "a.id, a.name, a.mime, a.kind, a.size, a.path, a.text, a.message_id";
+const ATTACHMENT_COLS: &str = "a.id, a.name, a.mime, a.kind, a.size, a.path, a.text, a.message_id, a.flags";
 
 fn attachment_from_row(r: &Row) -> DbResult<AttachmentRecord> {
     Ok(AttachmentRecord {
@@ -540,6 +585,7 @@ fn attachment_from_row(r: &Row) -> DbResult<AttachmentRecord> {
                 _ => AttachmentKind::Text,
             },
             size: r.get(4)?,
+            flags: serde_json::from_str(&r.get::<_, String>(8)?).unwrap_or_default(),
         },
         path: r.get(5)?,
         text: r.get(6)?,
@@ -565,12 +611,20 @@ pub fn insert_attachment(
     size: i64,
     path: &str,
     text: Option<&str>,
+    flags: &[String],
 ) -> DbResult<Attachment> {
     c.execute(
-        "INSERT INTO attachments (user_id, name, mime, kind, size, path, text, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-        params![user_id, name, mime, kind_str(kind), size, path, text, now()],
+        "INSERT INTO attachments (user_id, name, mime, kind, size, path, text, created_at, flags) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![user_id, name, mime, kind_str(kind), size, path, text, now(), serde_json::to_string(flags).unwrap_or_default()],
     )?;
-    Ok(Attachment { id: c.last_insert_rowid(), name: name.to_string(), mime: mime.to_string(), kind, size })
+    Ok(Attachment {
+        id: c.last_insert_rowid(),
+        name: name.to_string(),
+        mime: mime.to_string(),
+        kind,
+        size,
+        flags: flags.to_vec(),
+    })
 }
 
 pub fn get_attachment(c: &Connection, user_id: i64, id: i64) -> DbResult<Option<AttachmentRecord>> {
@@ -880,6 +934,212 @@ pub fn search(c: &Connection, user_id: i64, q: &str) -> DbResult<Vec<SearchHit>>
     Ok(hits)
 }
 
+// ---------- workspaces ----------
+
+const WORKSPACE_COLS: &str =
+    "w.id, w.name, w.model_allowlist, w.retention_days, w.secret_policy, w.pii_policy, w.injection_scan,
+     (SELECT COUNT(*) FROM users u WHERE u.workspace_id = w.id)";
+
+fn workspace_from_row(r: &Row) -> DbResult<Workspace> {
+    Ok(Workspace {
+        id: r.get(0)?,
+        name: r.get(1)?,
+        model_allowlist: serde_json::from_str(&r.get::<_, String>(2)?).unwrap_or_default(),
+        retention_days: r.get::<_, Option<i64>>(3)?.map(|d| d.clamp(0, u32::MAX as i64) as u32),
+        secret_policy: GuardPolicy::parse(&r.get::<_, String>(4)?),
+        pii_policy: GuardPolicy::parse(&r.get::<_, String>(5)?),
+        injection_scan: r.get(6)?,
+        member_count: r.get(7)?,
+    })
+}
+
+pub fn get_workspace(c: &Connection, id: i64) -> DbResult<Option<Workspace>> {
+    c.query_row(&format!("SELECT {WORKSPACE_COLS} FROM workspaces w WHERE w.id = ?1"), [id], workspace_from_row)
+        .optional()
+}
+
+pub fn list_workspaces(c: &Connection) -> DbResult<Vec<Workspace>> {
+    let mut st = c.prepare(&format!("SELECT {WORKSPACE_COLS} FROM workspaces w ORDER BY w.id"))?;
+    let rows = st.query_map([], workspace_from_row)?;
+    rows.collect()
+}
+
+/// Creates (`id = None`) or updates a workspace. Returns `None` if the id doesn't exist.
+pub fn save_workspace(c: &Connection, id: Option<i64>, w: &WorkspaceInput) -> DbResult<Option<i64>> {
+    let allow = serde_json::to_string(&w.model_allowlist).unwrap_or_else(|_| "[]".into());
+    let days = w.retention_days.map(i64::from);
+    match id {
+        Some(id) => {
+            let n = c.execute(
+                "UPDATE workspaces SET name = ?2, model_allowlist = ?3, retention_days = ?4, secret_policy = ?5, pii_policy = ?6, injection_scan = ?7 WHERE id = ?1",
+                params![id, w.name, allow, days, w.secret_policy.as_str(), w.pii_policy.as_str(), w.injection_scan],
+            )?;
+            Ok((n > 0).then_some(id))
+        }
+        None => {
+            c.execute(
+                "INSERT INTO workspaces (name, model_allowlist, retention_days, secret_policy, pii_policy, injection_scan, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![w.name, allow, days, w.secret_policy.as_str(), w.pii_policy.as_str(), w.injection_scan, now()],
+            )?;
+            Ok(Some(c.last_insert_rowid()))
+        }
+    }
+}
+
+/// Deletes an empty workspace (never the default one). Returns false otherwise.
+pub fn delete_workspace(c: &Connection, id: i64) -> DbResult<bool> {
+    Ok(c.execute(
+        "DELETE FROM workspaces WHERE id = ?1 AND id != 1 AND NOT EXISTS (SELECT 1 FROM users WHERE workspace_id = ?1)",
+        [id],
+    )? > 0)
+}
+
+// ---------- user administration ----------
+
+pub fn list_users(c: &Connection) -> DbResult<Vec<AdminUser>> {
+    let mut st = c.prepare("SELECT id, username, role, workspace_id, disabled, created_at FROM users ORDER BY id")?;
+    let rows = st.query_map([], |r| {
+        Ok(AdminUser {
+            id: r.get(0)?,
+            username: r.get(1)?,
+            role: Role::parse(&r.get::<_, String>(2)?),
+            workspace_id: r.get(3)?,
+            disabled: r.get(4)?,
+            created_at: r.get(5)?,
+        })
+    })?;
+    rows.collect()
+}
+
+pub fn get_admin_user(c: &Connection, id: i64) -> DbResult<Option<AdminUser>> {
+    Ok(list_users(c)?.into_iter().find(|u| u.id == id))
+}
+
+pub fn active_admin_count(c: &Connection) -> DbResult<i64> {
+    c.query_row("SELECT COUNT(*) FROM users WHERE role = 'admin' AND disabled = 0", [], |r| r.get(0))
+}
+
+pub fn update_user(c: &Connection, id: i64, u: &UpdateUser, password_hash: Option<&str>) -> DbResult<()> {
+    if let Some(role) = u.role {
+        c.execute("UPDATE users SET role = ?2 WHERE id = ?1", params![id, role.as_str()])?;
+    }
+    if let Some(ws) = u.workspace_id {
+        c.execute("UPDATE users SET workspace_id = ?2 WHERE id = ?1", params![id, ws])?;
+    }
+    if let Some(d) = u.disabled {
+        c.execute("UPDATE users SET disabled = ?2 WHERE id = ?1", params![id, d])?;
+        if d {
+            c.execute("DELETE FROM sessions WHERE user_id = ?1", [id])?;
+        }
+    }
+    if let Some(h) = password_hash {
+        c.execute("UPDATE users SET password_hash = ?2 WHERE id = ?1", params![id, h])?;
+        c.execute("DELETE FROM sessions WHERE user_id = ?1", [id])?;
+    }
+    Ok(())
+}
+
+/// Deletes a user and everything they own. Returns the attachment files to remove.
+pub fn delete_user(c: &mut Connection, id: i64) -> DbResult<Option<Vec<String>>> {
+    let tx = c.transaction()?;
+    let paths: Vec<String> = {
+        let mut st = tx.prepare("SELECT path FROM attachments WHERE user_id = ?1")?;
+        let rows = st.query_map([id], |r| r.get(0))?;
+        rows.collect::<DbResult<_>>()?
+    };
+    tx.execute("DELETE FROM attachments WHERE user_id = ?1", [id])?;
+    let n = tx.execute("DELETE FROM users WHERE id = ?1", [id])?;
+    tx.commit()?;
+    Ok((n > 0).then_some(paths))
+}
+
+// ---------- audit log ----------
+
+#[derive(Debug, Clone, Default)]
+pub struct AuditEvent {
+    pub user_id: Option<i64>,
+    pub username: String,
+    pub workspace_id: Option<i64>,
+    pub action: String,
+    pub target: String,
+    pub detail: String,
+    pub ip: String,
+}
+
+pub fn insert_audit(c: &Connection, e: &AuditEvent) -> DbResult<()> {
+    c.execute(
+        "INSERT INTO audit_log (ts, user_id, username, workspace_id, action, target, detail, ip) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![now(), e.user_id, e.username, e.workspace_id, e.action, e.target, e.detail, e.ip],
+    )?;
+    Ok(())
+}
+
+/// Newest first. `workspace` limits to one workspace; `before` pages by id.
+pub fn list_audit(
+    c: &Connection,
+    workspace: Option<i64>,
+    action_prefix: Option<&str>,
+    before: Option<i64>,
+    limit: i64,
+) -> DbResult<Vec<AuditEntry>> {
+    let mut st = c.prepare(
+        "SELECT id, ts, username, workspace_id, action, target, detail, ip FROM audit_log
+         WHERE (?1 IS NULL OR workspace_id = ?1) AND (?2 IS NULL OR action LIKE ?2 || '%') AND (?3 IS NULL OR id < ?3)
+         ORDER BY id DESC LIMIT ?4",
+    )?;
+    let rows = st.query_map(params![workspace, action_prefix, before, limit], |r| {
+        Ok(AuditEntry {
+            id: r.get(0)?,
+            ts: r.get(1)?,
+            username: r.get(2)?,
+            workspace_id: r.get(3)?,
+            action: r.get(4)?,
+            target: r.get(5)?,
+            detail: r.get(6)?,
+            ip: r.get(7)?,
+        })
+    })?;
+    rows.collect()
+}
+
+pub fn purge_audit(c: &Connection, cutoff: i64) -> DbResult<usize> {
+    c.execute("DELETE FROM audit_log WHERE ts < ?1", [cutoff])
+}
+
+// ---------- retention ----------
+
+/// Deletes chats untouched for longer than their workspace allows. Returns (chats deleted,
+/// attachment files to remove).
+pub fn retention_sweep(c: &mut Connection, now_ts: i64) -> DbResult<(usize, Vec<String>)> {
+    let tx = c.transaction()?;
+    let expired: Vec<i64> = {
+        let mut st = tx.prepare(
+            "SELECT c.id FROM conversations c JOIN users u ON u.id = c.user_id JOIN workspaces w ON w.id = u.workspace_id
+             WHERE w.retention_days IS NOT NULL AND c.updated_at < ?1 - w.retention_days * 86400",
+        )?;
+        let rows = st.query_map([now_ts], |r| r.get(0))?;
+        rows.collect::<DbResult<_>>()?
+    };
+    let mut paths = Vec::new();
+    for id in &expired {
+        {
+            let mut st = tx.prepare(
+                "SELECT a.path FROM attachments a JOIN messages m ON m.id = a.message_id WHERE m.conversation_id = ?1",
+            )?;
+            for p in st.query_map([id], |r| r.get::<_, String>(0))? {
+                paths.push(p?);
+            }
+        }
+        tx.execute(
+            "DELETE FROM attachments WHERE message_id IN (SELECT id FROM messages WHERE conversation_id = ?1)",
+            [id],
+        )?;
+        tx.execute("DELETE FROM conversations WHERE id = ?1", [id])?;
+    }
+    tx.commit()?;
+    Ok((expired.len(), paths))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -887,7 +1147,7 @@ mod tests {
     fn setup() -> (Connection, i64) {
         let db = Db::open_in_memory().unwrap();
         let conn = Arc::try_unwrap(db.conn).ok().unwrap().into_inner().unwrap();
-        let u = create_user(&conn, "neko", "hash", Role::Admin).unwrap();
+        let u = create_user(&conn, "neko", "hash", Role::Admin, 1).unwrap();
         (conn, u.id)
     }
 

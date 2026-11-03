@@ -34,11 +34,14 @@ async fn main() -> anyhow::Result<()> {
         let mut tick = tokio::time::interval(std::time::Duration::from_secs(3600));
         loop {
             tick.tick().await;
-            neko_server::uploads::sweep(&sweeper).await;
+            neko_server::admin::maintenance(&sweeper).await;
         }
     });
     let app = neko_server::router(state);
-    axum::serve(listener, app).with_graceful_shutdown(shutdown_signal()).await?;
+    // Connect info lets the audit log record client addresses.
+    axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
     Ok(())
 }
 
@@ -47,6 +50,9 @@ fn print_banner(config: &Config, setup_code: Option<&str>) {
     println!();
     println!("  /\\_/\\   Neko AI is running");
     println!(" ( o.o )  no telemetry · data in {}", config.data_dir.display());
+    if config.local_only {
+        println!("          LOCAL-ONLY mode: nothing leaves your network");
+    }
     println!("  > ^ <");
     for url in &urls {
         println!("   → {url}");

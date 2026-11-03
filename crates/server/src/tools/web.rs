@@ -103,6 +103,20 @@ async fn resolve(url: &Url, allow_private: bool) -> Result<Vec<SocketAddr>, Stri
     Ok(addrs)
 }
 
+/// For local-only mode: the URL's host must resolve only to loopback/private addresses.
+pub async fn ensure_local_url(url: &str) -> Result<(), String> {
+    let u = Url::parse(url.trim()).map_err(|e| format!("Invalid URL: {e}"))?;
+    let addrs = resolve(&u, true).await?;
+    if let Some(public) = addrs.iter().find(|a| is_public_ip(a.ip())) {
+        return Err(format!(
+            "Local-only mode: {} is on the internet ({}). Only providers on this machine or your network are allowed.",
+            u.host_str().unwrap_or("?"),
+            public.ip()
+        ));
+    }
+    Ok(())
+}
+
 // ---------- fetch ----------
 
 pub struct Fetched {

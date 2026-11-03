@@ -11,13 +11,15 @@ use web_sys::{AbortSignal, Headers, ReadableStreamDefaultReader, Request, Reques
 pub struct ApiError {
     pub status: u16,
     pub message: String,
+    /// Secrets/personal data that made the server hold a message back.
+    pub findings: Vec<neko_shared::Finding>,
 }
 
 impl ApiError {
     fn network(e: JsValue) -> Self {
         let detail =
             e.dyn_ref::<js_sys::Error>().map(|e| String::from(e.message())).unwrap_or_else(|| format!("{e:?}"));
-        Self { status: 0, message: format!("Can't reach the server ({detail})") }
+        Self { status: 0, message: format!("Can't reach the server ({detail})"), findings: Vec::new() }
     }
 
     pub fn is_abort(&self) -> bool {
@@ -66,10 +68,10 @@ async fn fetch(method: &str, path: &str, body: Body, signal: Option<&AbortSignal
     }
     let status = resp.status();
     let text = text(&resp).await.unwrap_or_default();
-    let message = serde_json::from_str::<ErrorBody>(&text)
-        .map(|b| b.error)
-        .unwrap_or_else(|_| format!("Request failed ({status})"));
-    Err(ApiError { status, message })
+    let (message, findings) = serde_json::from_str::<ErrorBody>(&text)
+        .map(|b| (b.error, b.findings))
+        .unwrap_or_else(|_| (format!("Request failed ({status})"), Vec::new()));
+    Err(ApiError { status, message, findings })
 }
 
 async fn text(resp: &Response) -> ApiResult<String> {
@@ -79,8 +81,11 @@ async fn text(resp: &Response) -> ApiResult<String> {
 
 async fn parse<T: DeserializeOwned>(resp: Response) -> ApiResult<T> {
     let body = text(&resp).await?;
-    serde_json::from_str(&body)
-        .map_err(|e| ApiError { status: resp.status(), message: format!("Unexpected response: {e}") })
+    serde_json::from_str(&body).map_err(|e| ApiError {
+        status: resp.status(),
+        message: format!("Unexpected response: {e}"),
+        findings: Vec::new(),
+    })
 }
 
 pub async fn get<T: DeserializeOwned>(path: &str) -> ApiResult<T> {
@@ -112,7 +117,8 @@ pub async fn stream<B: Serialize>(
 ) -> ApiResult<()> {
     let json = serde_json::to_string(body).expect("serializable body");
     let resp = fetch("POST", path, Body::Json(json), Some(signal)).await?;
-    let body = resp.body().ok_or_else(|| ApiError { status: 0, message: "Empty response".into() })?;
+    let body =
+        resp.body().ok_or_else(|| ApiError { status: 0, message: "Empty response".into(), findings: Vec::new() })?;
     let reader: ReadableStreamDefaultReader = body.get_reader().unchecked_into();
     let mut parser = SseParser::new();
     let done_key = JsValue::from_str("done");
