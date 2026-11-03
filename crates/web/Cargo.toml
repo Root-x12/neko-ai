@@ -1,0 +1,26 @@
+[package]
+name = "neko-web"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+neko-shared = { path = "../shared" }
+serde.workspace = true
+serde_json.workspace = true
+leptos = { version = "0.8", features = ["csr"] }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+console_error_panic_hook = "0.1"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+
+[dependencies.web-sys]
+version = "0.3"
+features = [
+  "AbortController", "AbortSignal", "Clipboard", "Document", "DomTokenList", "Element", "Event", "EventTarget",
+  "Headers", "HtmlElement", "HtmlInputElement", "HtmlTextAreaElement", "KeyboardEvent", "Location",
+  "MediaQueryList", "Navigator", "ReadableStream", "ReadableStreamDefaultReader", "Request", "RequestCredentials", "RequestInit", "Response",
+  "ScrollBehavior", "ScrollToOptions", "Storage", "Window", "Blob", "BlobPropertyBag", "Url", "HtmlAnchorElement", "HtmlDocument",
+]

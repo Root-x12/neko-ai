@@ -1,0 +1,10 @@
+[build]
+target = "index.html"
+dist = "dist"
+
+# `trunk serve` for frontend work: run the server (cargo run -p neko-server) on :8080 alongside.
+[serve]
+port = 8081
+
+[[proxy]]
+backend = "http://127.0.0.1:8080/api/"
