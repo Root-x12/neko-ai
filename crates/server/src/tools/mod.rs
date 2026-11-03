@@ -41,6 +41,12 @@ impl Toolbox {
     pub async fn build(s: &AppState, user: &User, sel: &ToolSelection) -> (Self, Vec<(String, String)>) {
         let mut tb = Self::empty();
         let mut warnings = Vec::new();
+        let mut sel = sel.clone();
+        if s.config.local_only && (sel.web_search || sel.fetch_url) {
+            warnings.push(("Web tools".into(), "Web search and page reading are off in local-only mode".into()));
+            sel.web_search = false;
+            sel.fetch_url = false;
+        }
         if sel.web_search {
             let uid = user.id;
             match s.db.call(move |c| db::search_settings_record(c, uid)).await {
@@ -91,6 +97,12 @@ impl Toolbox {
                         continue;
                     }
                 };
+                if s.config.local_only && config.transport == McpTransport::Http {
+                    if let Err(e) = web::ensure_local_url(&config.url).await {
+                        warnings.push((name, e));
+                        continue;
+                    }
+                }
                 match s.mcp.list_tools(&s.http, &config).await {
                     Ok(tools) => {
                         for t in tools {

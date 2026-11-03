@@ -124,9 +124,11 @@ pub async fn upload(State(s): State<AppState>, a: AuthUser, mut form: Multipart)
     tokio::fs::create_dir_all(&dir).await.map_err(AppError::internal)?;
     let file_name = format!("{}.bin", crypto::random_token());
     tokio::fs::write(dir.join(&file_name), &bytes).await.map_err(AppError::internal)?;
+    let flags = text.as_deref().map(crate::guard::scan_injection).unwrap_or_default();
     let (uid, size, stored) = (a.user.id, bytes.len() as i64, file_name.clone());
     let saved =
-        s.db.call(move |c| db::insert_attachment(c, uid, &name, &mime, kind, size, &stored, text.as_deref())).await;
+        s.db.call(move |c| db::insert_attachment(c, uid, &name, &mime, kind, size, &stored, text.as_deref(), &flags))
+            .await;
     match saved {
         Ok(att) => Ok(Json(att)),
         Err(e) => {

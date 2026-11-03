@@ -1,5 +1,6 @@
 //! Neko AI server: auth, provider keys, chat storage and streaming proxy to LLM providers.
 
+pub mod admin;
 pub mod api;
 pub mod auth;
 pub mod chat;
@@ -8,6 +9,7 @@ pub mod crypto;
 pub mod db;
 pub mod devices;
 pub mod error;
+pub mod guard;
 pub mod llm;
 pub mod tools;
 pub mod uploads;

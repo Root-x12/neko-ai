@@ -320,9 +320,12 @@ fn AttachmentList(files: Vec<Attachment>) -> impl IntoView {
                             .into_any()
                     } else {
                         view! {
-                            <a class="file-chip" href=url download=title.clone() title=title>
+                            <a class="file-chip" class:flagged=!f.flags.is_empty() href=url download=title.clone() title=title>
                                 <Icon svg=if f.kind == AttachmentKind::Pdf { icons::PDF } else { icons::FILE } size=15 />
                                 <span>{f.name}</span>
+                                {(!f.flags.is_empty()).then(|| view! {
+                                    <span class="flag-badge" title=f.flags.join("; ")>"⚠"</span>
+                                })}
                                 <span class="muted small">{util::file_size(f.size)}</span>
                             </a>
                         }
@@ -357,15 +360,18 @@ fn ToolCard(call: ToolCall) -> impl IntoView {
         "ok"
     };
     let pretty_args = serde_json::to_string_pretty(&args).unwrap_or_else(|_| call.arguments.clone());
+    let flags = call.flags.clone();
+    let flagged = !flags.is_empty();
     let has_args = !call.name.is_empty();
     view! {
-        <details class="tool-card" data-status=status>
+        <details class="tool-card" data-status=status class:flagged=flagged>
             <summary>
                 <span class="tool-icon">
                     <Icon svg=icon size=15 />
                 </span>
                 <span class="tool-label">{call.label}</span>
                 <span class="tool-headline">{headline}</span>
+                {flagged.then(|| view! { <span class="flag-badge" title="Possible prompt injection">"⚠ injection?"</span> })}
                 <span class="tool-status">
                     {match status {
                         "running" => view! { <span class="spinner"></span> }.into_any(),
@@ -374,6 +380,12 @@ fn ToolCard(call: ToolCall) -> impl IntoView {
                     }}
                 </span>
             </summary>
+            {(!flags.is_empty()).then(|| view! {
+                <div class="flag-note">
+                    <Icon svg=icons::SHIELD size=14 />
+                    "Possible prompt injection: " {flags.join("; ")} ". The AI was told to treat it as untrusted data."
+                </div>
+            })}
             {has_args.then(|| view! { <pre class="tool-pre">{pretty_args}</pre> })}
             {(!call.result.is_empty()).then(|| view! { <pre class="tool-pre result">{call.result}</pre> })}
         </details>
@@ -679,6 +691,9 @@ fn Composer() -> impl IntoView {
                                             }
                                         }}
                                         <span class="pending-name">{f.name.clone()}</span>
+                                        {f.att.as_ref().filter(|a| !a.flags.is_empty()).map(|a| view! {
+                                            <span class="flag-badge" title=format!("Possible prompt injection: {}", a.flags.join("; "))>"⚠"</span>
+                                        })}
                                         <button
                                             type="button"
                                             class="icon-btn small"

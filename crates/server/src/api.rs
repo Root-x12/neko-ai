@@ -11,6 +11,7 @@ use neko_shared::*;
 use serde::Deserialize;
 
 use crate::{
+    admin::{audit, audit_anon, ClientIp},
     auth::{self, AuthUser},
     chat, crypto, db, devices,
     error::{AppError, AppResult},
@@ -47,6 +48,7 @@ pub fn routes() -> Router<AppState> {
         .route("/devices", get(devices_info))
         .route("/devices/{id}", delete(revoke_device))
         .route("/devices/revoke-others", post(revoke_other_devices))
+        .merge(crate::admin::routes())
         .fallback(|| async { AppError::not_found("API route") })
 }
 
@@ -61,7 +63,7 @@ async fn auth_status(State(s): State<AppState>) -> AppResult<Json<AuthStatus>> {
     Ok(Json(AuthStatus { needs_setup: count == 0, signup_open: count == 0 || s.config.allow_signup }))
 }
 
-fn validate_credentials(username: &str, password: &str) -> AppResult<()> {
+pub(crate) fn validate_credentials(username: &str, password: &str) -> AppResult<()> {
     let ok_name = (3..=32).contains(&username.chars().count())
         && username.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'));
     if !ok_name {
@@ -70,7 +72,7 @@ fn validate_credentials(username: &str, password: &str) -> AppResult<()> {
     validate_password(password)
 }
 
-fn validate_password(password: &str) -> AppResult<()> {
+pub(crate) fn validate_password(password: &str) -> AppResult<()> {
     if !(8..=256).contains(&password.chars().count()) {
         return Err(AppError::bad_request("Password must be at least 8 characters"));
     }
@@ -104,6 +106,7 @@ async fn start_session(s: &AppState, user: User, headers: &HeaderMap) -> AppResu
 async fn register(
     State(s): State<AppState>,
     headers: HeaderMap,
+    ip: ClientIp,
     Json(req): Json<RegisterRequest>,
 ) -> AppResult<Response> {
     let username = req.username.trim().to_string();
@@ -129,7 +132,7 @@ async fn register(
             if role == Role::Admin && db::user_count(c)? > 0 {
                 return Ok(None);
             }
-            match db::create_user(c, &username, &hash, role) {
+            match db::create_user(c, &username, &hash, role, 1) {
                 Ok(u) => Ok(Some(u)),
                 Err(rusqlite::Error::SqliteFailure(e, _)) if e.code == rusqlite::ErrorCode::ConstraintViolation => {
                     Ok(None)
@@ -143,10 +146,16 @@ async fn register(
         *s.setup_code.lock().unwrap() = None;
     }
     tracing::info!(user = %user.username, role = user.role.as_str(), "account created");
+    audit(&s, Some(&user), &ip.0, "auth.register", &user.username, user.role.as_str()).await;
     start_session(&s, user, &headers).await
 }
 
-async fn login(State(s): State<AppState>, headers: HeaderMap, Json(req): Json<LoginRequest>) -> AppResult<Response> {
+async fn login(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    ip: ClientIp,
+    Json(req): Json<LoginRequest>,
+) -> AppResult<Response> {
     let key = req.username.trim().to_lowercase();
     {
         let failures = s.login_failures.lock().unwrap();
@@ -159,17 +168,22 @@ async fn login(State(s): State<AppState>, headers: HeaderMap, Json(req): Json<Lo
     let name = req.username.trim().to_string();
     let record = s.db.call(move |c| db::find_user_by_name(c, &name)).await?;
     let password = req.password;
-    let verified = tokio::task::spawn_blocking(move || {
-        record.filter(|r| crypto::verify_password(&password, &r.password_hash)).map(|r| r.user)
-    })
-    .await
-    .map_err(AppError::internal)?;
+    let verified =
+        tokio::task::spawn_blocking(move || record.filter(|r| crypto::verify_password(&password, &r.password_hash)))
+            .await
+            .map_err(AppError::internal)?;
     match verified {
-        Some(user) => {
+        Some(rec) if rec.disabled => {
+            audit(&s, Some(&rec.user), &ip.0, "auth.login_disabled", &rec.user.username, "").await;
+            Err(AppError::forbidden("This account has been disabled. Ask the admin."))
+        }
+        Some(rec) => {
             s.login_failures.lock().unwrap().remove(&key);
-            start_session(&s, user, &headers).await
+            audit(&s, Some(&rec.user), &ip.0, "auth.login", &rec.user.username, user_agent(&headers)).await;
+            start_session(&s, rec.user, &headers).await
         }
         None => {
+            audit_anon(&s, req.username.trim(), &ip.0, "auth.login_failed", "").await;
             let mut failures = s.login_failures.lock().unwrap();
             let now = db::now();
             let entry = failures.entry(key).or_insert((0, now));
@@ -178,6 +192,7 @@ async fn login(State(s): State<AppState>, headers: HeaderMap, Json(req): Json<Lo
             }
             entry.0 += 1;
             entry.1 = now;
+            drop(failures);
             Err(AppError::new(StatusCode::UNAUTHORIZED, "Wrong username or password"))
         }
     }
@@ -198,6 +213,7 @@ async fn me(a: AuthUser) -> Json<User> {
 async fn change_password(
     State(s): State<AppState>,
     a: AuthUser,
+    ip: ClientIp,
     Json(req): Json<ChangePasswordRequest>,
 ) -> AppResult<StatusCode> {
     validate_password(&req.new_password)?;
@@ -220,6 +236,7 @@ async fn change_password(
         db::delete_other_sessions(c, uid, sid)
     })
     .await?;
+    audit(&s, Some(&a.user), &ip.0, "auth.password_change", &a.user.username, "").await;
     Ok(no_content())
 }
 
@@ -246,12 +263,22 @@ fn encrypt_key(s: &AppState, key: &str) -> Option<(Vec<u8>, String)> {
     (!key.is_empty()).then(|| (s.vault.encrypt(key), crypto::key_hint(key)))
 }
 
+/// In local-only mode, every provider and MCP server must live on this machine or the LAN.
+pub(crate) async fn ensure_local(s: &AppState, url: &str) -> AppResult<()> {
+    if s.config.local_only {
+        crate::tools::web::ensure_local_url(url).await.map_err(AppError::bad_request)?;
+    }
+    Ok(())
+}
+
 async fn create_provider(
     State(s): State<AppState>,
     a: AuthUser,
+    ip: ClientIp,
     Json(input): Json<ProviderInput>,
 ) -> AppResult<Json<Provider>> {
     let (name, base_url) = clean_provider_input(&input)?;
+    ensure_local(&s, &base_url).await?;
     let key = input.api_key.as_deref().and_then(|k| encrypt_key(&s, k));
     let uid = a.user.id;
     let provider =
@@ -261,16 +288,25 @@ async fn create_provider(
         })
         .await?
         .ok_or_else(|| AppError::internal("provider vanished after insert"))?;
+    let p = &provider.provider;
+    audit(&s, Some(&a.user), &ip.0, "provider.create", &p.name, &p.base_url).await;
     Ok(Json(provider.provider))
 }
 
 async fn update_provider(
     State(s): State<AppState>,
     a: AuthUser,
+    ip: ClientIp,
     Path(id): Path<i64>,
     Json(input): Json<ProviderInput>,
 ) -> AppResult<Json<Provider>> {
     let (name, base_url) = clean_provider_input(&input)?;
+    ensure_local(&s, &base_url).await?;
+    let key_change = match input.api_key.as_deref() {
+        None => "",
+        Some("") => " (key removed)",
+        Some(_) => " (key replaced)",
+    };
     let key = input.api_key.as_deref().map(|k| encrypt_key(&s, k));
     let uid = a.user.id;
     let provider =
@@ -280,11 +316,20 @@ async fn update_provider(
         })
         .await?
         .ok_or_else(|| AppError::not_found("Provider"))?;
+    let p = &provider.provider;
+    audit(&s, Some(&a.user), &ip.0, "provider.update", &p.name, format!("{}{key_change}", p.base_url)).await;
     Ok(Json(provider.provider))
 }
 
-async fn delete_provider(State(s): State<AppState>, a: AuthUser, Path(id): Path<i64>) -> AppResult<StatusCode> {
-    if s.db.call(move |c| db::delete_provider(c, a.user.id, id)).await? {
+async fn delete_provider(
+    State(s): State<AppState>,
+    a: AuthUser,
+    ip: ClientIp,
+    Path(id): Path<i64>,
+) -> AppResult<StatusCode> {
+    let uid = a.user.id;
+    if s.db.call(move |c| db::delete_provider(c, uid, id)).await? {
+        audit(&s, Some(&a.user), &ip.0, "provider.delete", id.to_string(), "").await;
         Ok(no_content())
     } else {
         Err(AppError::not_found("Provider"))
@@ -296,6 +341,7 @@ pub(crate) async fn endpoint_for(s: &AppState, user_id: i64, provider_id: i64) -
         s.db.call(move |c| db::get_provider(c, user_id, provider_id))
             .await?
             .ok_or_else(|| AppError::not_found("Provider"))?;
+    ensure_local(s, &rec.provider.base_url).await?;
     let api_key = match rec.api_key_enc {
         Some(blob) => Some(s.vault.decrypt(&blob).map_err(|e| AppError::bad_request(e.to_string()))?),
         None => None,
@@ -305,7 +351,9 @@ pub(crate) async fn endpoint_for(s: &AppState, user_id: i64, provider_id: i64) -
 
 async fn provider_models(State(s): State<AppState>, a: AuthUser, Path(id): Path<i64>) -> AppResult<Json<ModelList>> {
     let ep = endpoint_for(&s, a.user.id, id).await?;
-    let models = llm::list_models(&s.http, &ep).await.map_err(AppError::bad_gateway)?;
+    let mut models = llm::list_models(&s.http, &ep).await.map_err(AppError::bad_gateway)?;
+    let allow = crate::admin::workspace_of(&s, &a.user).await.model_allowlist;
+    models.retain(|m| crate::guard::model_allowed(&allow, m));
     Ok(Json(ModelList { models }))
 }
 
@@ -413,10 +461,17 @@ async fn patch_conversation(
     .ok_or_else(|| AppError::not_found("Conversation"))
 }
 
-async fn delete_conversation(State(s): State<AppState>, a: AuthUser, Path(id): Path<i64>) -> AppResult<StatusCode> {
-    match s.db.call(move |c| db::delete_conversation(c, a.user.id, id)).await? {
+async fn delete_conversation(
+    State(s): State<AppState>,
+    a: AuthUser,
+    ip: ClientIp,
+    Path(id): Path<i64>,
+) -> AppResult<StatusCode> {
+    let uid = a.user.id;
+    match s.db.call(move |c| db::delete_conversation(c, uid, id)).await? {
         Some(paths) => {
             uploads::remove_files(&s.config.data_dir, paths).await;
+            audit(&s, Some(&a.user), &ip.0, "chat.delete", id.to_string(), "").await;
             Ok(no_content())
         }
         None => Err(AppError::not_found("Conversation")),
@@ -450,19 +505,28 @@ async fn devices_info(State(s): State<AppState>, a: AuthUser) -> AppResult<Json<
     Ok(Json(DevicesInfo { urls, qr_svg, sessions }))
 }
 
-async fn revoke_device(State(s): State<AppState>, a: AuthUser, Path(id): Path<i64>) -> AppResult<StatusCode> {
+async fn revoke_device(
+    State(s): State<AppState>,
+    a: AuthUser,
+    ip: ClientIp,
+    Path(id): Path<i64>,
+) -> AppResult<StatusCode> {
     if id == a.session_id {
         return Err(AppError::bad_request("Use “Sign out” to end this device's session"));
     }
-    if s.db.call(move |c| db::delete_session_by_id(c, a.user.id, id)).await? {
+    let uid = a.user.id;
+    if s.db.call(move |c| db::delete_session_by_id(c, uid, id)).await? {
+        audit(&s, Some(&a.user), &ip.0, "device.revoke", id.to_string(), "").await;
         Ok(no_content())
     } else {
         Err(AppError::not_found("Device"))
     }
 }
 
-async fn revoke_other_devices(State(s): State<AppState>, a: AuthUser) -> AppResult<StatusCode> {
-    s.db.call(move |c| db::delete_other_sessions(c, a.user.id, a.session_id)).await?;
+async fn revoke_other_devices(State(s): State<AppState>, a: AuthUser, ip: ClientIp) -> AppResult<StatusCode> {
+    let (uid, sid) = (a.user.id, a.session_id);
+    s.db.call(move |c| db::delete_other_sessions(c, uid, sid)).await?;
+    audit(&s, Some(&a.user), &ip.0, "device.revoke_others", "", "").await;
     Ok(no_content())
 }
 
@@ -475,6 +539,7 @@ async fn get_search_settings(State(s): State<AppState>, a: AuthUser) -> AppResul
 async fn put_search_settings(
     State(s): State<AppState>,
     a: AuthUser,
+    ip: ClientIp,
     Json(input): Json<SearchSettingsInput>,
 ) -> AppResult<Json<SearchSettings>> {
     let base_url = input.base_url.trim().trim_end_matches('/').to_string();
@@ -491,6 +556,7 @@ async fn put_search_settings(
         })
         .await?
         .settings;
+    audit(&s, Some(&a.user), &ip.0, "tools.search_settings", settings.backend.as_str(), "").await;
     Ok(Json(settings))
 }
 
@@ -528,7 +594,13 @@ fn seal_pairs(
     Ok(Some((s.vault.encrypt(&json), names)))
 }
 
-async fn save_mcp(s: AppState, a: AuthUser, id: Option<i64>, input: McpServerInput) -> AppResult<Json<McpServer>> {
+async fn save_mcp(
+    s: AppState,
+    a: AuthUser,
+    ip: ClientIp,
+    id: Option<i64>,
+    input: McpServerInput,
+) -> AppResult<Json<McpServer>> {
     let name = input.name.trim().to_string();
     if name.is_empty() || name.chars().count() > 60 {
         return Err(AppError::bad_request("Give the server a name (up to 60 characters)"));
@@ -540,6 +612,7 @@ async fn save_mcp(s: AppState, a: AuthUser, id: Option<i64>, input: McpServerInp
             if !(url.starts_with("http://") || url.starts_with("https://")) {
                 return Err(AppError::bad_request("Server URL must start with http:// or https://"));
             }
+            ensure_local(&s, &url).await?;
         }
         McpTransport::Stdio => {
             if a.user.role != Role::Admin {
@@ -579,29 +652,43 @@ async fn save_mcp(s: AppState, a: AuthUser, id: Option<i64>, input: McpServerInp
         .await?
         .ok_or_else(|| AppError::not_found("MCP server"))?;
     s.mcp.forget(saved.server.id).await;
+    let m = &saved.server;
+    let target =
+        if m.transport == McpTransport::Http { m.url.clone() } else { format!("{} {}", m.command, m.args.join(" ")) };
+    let action = if id.is_some() { "mcp.update" } else { "mcp.create" };
+    audit(&s, Some(&a.user), &ip.0, action, &m.name, target).await;
     Ok(Json(saved.server))
 }
 
 async fn create_mcp(
     State(s): State<AppState>,
     a: AuthUser,
+    ip: ClientIp,
     Json(input): Json<McpServerInput>,
 ) -> AppResult<Json<McpServer>> {
-    save_mcp(s, a, None, input).await
+    save_mcp(s, a, ip, None, input).await
 }
 
 async fn update_mcp(
     State(s): State<AppState>,
     a: AuthUser,
+    ip: ClientIp,
     Path(id): Path<i64>,
     Json(input): Json<McpServerInput>,
 ) -> AppResult<Json<McpServer>> {
-    save_mcp(s, a, Some(id), input).await
+    save_mcp(s, a, ip, Some(id), input).await
 }
 
-async fn delete_mcp(State(s): State<AppState>, a: AuthUser, Path(id): Path<i64>) -> AppResult<StatusCode> {
-    if s.db.call(move |c| db::delete_mcp_server(c, a.user.id, id)).await? {
+async fn delete_mcp(
+    State(s): State<AppState>,
+    a: AuthUser,
+    ip: ClientIp,
+    Path(id): Path<i64>,
+) -> AppResult<StatusCode> {
+    let uid = a.user.id;
+    if s.db.call(move |c| db::delete_mcp_server(c, uid, id)).await? {
         s.mcp.forget(id).await;
+        audit(&s, Some(&a.user), &ip.0, "mcp.delete", id.to_string(), "").await;
         Ok(no_content())
     } else {
         Err(AppError::not_found("MCP server"))

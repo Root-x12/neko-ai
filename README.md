@@ -25,6 +25,10 @@ Each mode has a light and a dark version. There's an animated cat mascot that bl
 | **MCP** | Plug in any MCP server: remote over Streamable HTTP (with encrypted auth headers) or a local command over stdio (admin only) |
 | **Files** | Attach images, PDFs and text/code files by clicking, pasting or dragging. Images and PDFs go to the model natively where the provider supports it, otherwise as extracted text |
 | **Canvas** | HTML, SVG, Mermaid diagrams and React components from the chat render in a side panel, with preview and code views, a switcher between artifacts, and download. Previews run in a sandboxed frame with no network or cookie access, using local copies of React, Tailwind, Babel and Mermaid |
+| **Guard** | Every message (and attached file text) is scanned for API keys, private keys, tokens, passwords, connection strings, emails, card numbers (Luhn-checked), SSNs, IBANs and phone numbers before it leaves the server. Depending on workspace policy it warns (send anyway / redact & send), redacts automatically, or blocks |
+| **Injection scan** | Fetched pages, tool and MCP results, and uploaded documents are checked for prompt-injection patterns and hidden characters. Flagged content is marked in the UI, and the model is told to treat it as untrusted data |
+| **Governance** | Roles (admin, team lead, user), workspaces with model allowlists (`claude-*`, `gpt-4o*`…), chat retention in days, and their own guard policies. Audit log of sign-ins, guard decisions, admin and settings changes, filterable and exportable to CSV. User management: create, disable, reset password, delete |
+| **Local-only mode** | `NEKO_LOCAL_ONLY=true` only allows providers and MCP servers on this machine or your LAN (for example Ollama) and turns web tools off, so nothing leaves your network |
 | **Privacy** | No telemetry, no CDNs, no external fonts. API keys are encrypted at rest (ChaCha20-Poly1305) and never sent back to the browser |
 
 ## Quick start
@@ -64,6 +68,9 @@ To keep it on this computer only, run with `NEKO_BIND=127.0.0.1:8080`.
 | `NEKO_SECURE_COOKIES` | `false` | Mark the session cookie `Secure` (use with HTTPS) |
 | `NEKO_SECRET_KEY` | *(generated)* | Base64 32-byte key for encrypting API keys; otherwise `data/secret.key` is created |
 | `NEKO_FETCH_ALLOW_PRIVATE` | `false` | Let the page-reading tool open LAN/localhost addresses (off so a prompt-injected model can't probe your network) |
+| `NEKO_LOCAL_ONLY` | `false` | Self-hosted lockdown: only LAN/loopback providers and MCP servers, no web tools |
+| `NEKO_AUDIT_RETENTION_DAYS` | `365` | Delete audit entries older than this (`0` keeps them forever) |
+| `NEKO_TRUST_PROXY` | `false` | Take client IPs for the audit log from `X-Forwarded-For` (only behind your own reverse proxy) |
 | `RUST_LOG` | `info` | Log level |
 
 **Back up `data/`**. If you lose `secret.key`, the stored API keys can no longer be decrypted (chats are unaffected).
@@ -99,5 +106,5 @@ crates/
 2. ✅ Themes and devices: Neko/Cyber, palettes, light/dark, phone layout, device sessions
 3. ✅ Tools: MCP client, web search and URL fetch toggles, PDF and image uploads
 4. ✅ Canvas: HTML, SVG, Mermaid and React previews in a side panel
-5. Security: PII and secret detection before sending, prompt-injection scanning, audit logs, team roles, model allowlists, retention policies
+5. ✅ Security: PII and secret detection before sending, prompt-injection scanning, audit logs, team roles, model allowlists, retention policies
 6. Extras: export to Markdown/PDF/JSON, memory across chats, RAG over your files

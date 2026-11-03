@@ -53,6 +53,8 @@ pub const PDF: &str =
 pub const PLAY: &str = svg(r#"<rect x="3" y="4" width="18" height="16" rx="2"/><path d="m10 9 5 3-5 3z"/>"#);
 pub const DOWNLOAD: &str = svg(r#"<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>"#);
 pub const EXPAND: &str = svg(r#"<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>"#);
+pub const SHIELD: &str =
+    svg(r#"<path d="M12 3 4 6v6c0 4.5 3.4 8.3 8 9 4.6-.7 8-4.5 8-9V6z"/><path d="m9 12 2 2 4-4"/>"#);
 
 #[component]
 pub fn Icon(#[prop(into)] svg: &'static str, #[prop(optional)] size: Option<u32>) -> impl IntoView {
