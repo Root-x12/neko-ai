@@ -99,3 +99,11 @@ pub fn device_label(ua: &str) -> String {
 pub fn is_touch() -> bool {
     window().match_media("(pointer: coarse)").ok().flatten().is_some_and(|m| m.matches())
 }
+
+pub fn file_size(bytes: i64) -> String {
+    match bytes {
+        b if b < 1024 => format!("{b} B"),
+        b if b < 1024 * 1024 => format!("{:.0} KB", b as f64 / 1024.0),
+        b => format!("{:.1} MB", b as f64 / 1024.0 / 1024.0),
+    }
+}

@@ -12,6 +12,7 @@ use crate::{api, theme, util};
 pub enum SettingsTab {
     Appearance,
     Providers,
+    Tools,
     Devices,
     Account,
 }
@@ -32,6 +33,8 @@ pub struct MsgView {
     pub model: RwSignal<Option<String>>,
     pub error: RwSignal<Option<String>>,
     pub streaming: RwSignal<bool>,
+    pub attachments: StoredValue<Vec<Attachment>>,
+    pub tool_calls: RwSignal<Vec<ToolCall>>,
 }
 
 impl MsgView {
@@ -43,9 +46,21 @@ impl MsgView {
             model: RwSignal::new(m.model),
             error: RwSignal::new(m.error),
             streaming: RwSignal::new(false),
+            attachments: StoredValue::new(m.attachments),
+            tool_calls: RwSignal::new(m.tool_calls),
         }
     }
 }
+
+/// A file picked in the composer: uploading (`att` is None) or ready to send.
+#[derive(Clone, PartialEq)]
+pub struct PendingFile {
+    pub key: u32,
+    pub name: String,
+    pub att: Option<Attachment>,
+}
+
+const TOOLS_KEY: &str = "neko.tools";
 
 const LAST_MODEL_KEY: &str = "neko.lastModel";
 
@@ -76,6 +91,9 @@ pub struct Ctx {
     pub idle: RwSignal<bool>,
     pub signed_out: RwSignal<bool>,
     pub theme: theme::Theme,
+    pub pending: RwSignal<Vec<PendingFile>>,
+    pub tools: RwSignal<ToolSelection>,
+    pub mcp_servers: RwSignal<Vec<McpServer>>,
 }
 
 impl Ctx {
@@ -105,6 +123,11 @@ impl Ctx {
             idle: RwSignal::new(false),
             signed_out: RwSignal::new(false),
             theme,
+            pending: RwSignal::new(Vec::new()),
+            tools: RwSignal::new(
+                theme::load_pref(TOOLS_KEY).and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default(),
+            ),
+            mcp_servers: RwSignal::new(Vec::new()),
         }
     }
 
@@ -339,13 +362,20 @@ impl Ctx {
 
     pub fn send(self, content: String) {
         let content = content.trim().to_string();
-        if content.is_empty() || self.streaming.get_untracked() {
+        let files = self.pending.get_untracked();
+        if files.iter().any(|f| f.att.is_none()) {
+            self.notify("Wait for the files to finish uploading", true);
+            return;
+        }
+        if (content.is_empty() && files.is_empty()) || self.streaming.get_untracked() {
             return;
         }
         let Some((provider_id, model)) = self.target() else { return };
         let replace_from = self.editing.get_untracked();
+        let attachments: Vec<i64> = files.iter().filter_map(|f| f.att.as_ref().map(|a| a.id)).collect();
         self.streaming.set(true);
         self.draft.set(String::new());
+        self.pending.set(Vec::new());
         spawn_local(async move {
             let conv_id = match self.current_id.get_untracked() {
                 Some(id) => id,
@@ -364,6 +394,7 @@ impl Ctx {
                     Err(e) => {
                         self.streaming.set(false);
                         self.draft.set(content);
+                        self.pending.set(files);
                         return self.error(e);
                     }
                 },
@@ -374,12 +405,16 @@ impl Ctx {
                 model,
                 params: self.params.get_untracked(),
                 replace_from,
+                attachments,
+                tools: self.tools.get_untracked(),
             };
             let started = self.run_stream(format!("/conversations/{conv_id}/messages"), body, replace_from).await;
             if started {
                 self.editing.set(None);
             } else if self.draft.with_untracked(|d| d.is_empty()) {
-                self.draft.set(content); // don't lose what the user typed
+                // Don't lose what the user typed or attached.
+                self.draft.set(content);
+                self.pending.set(files);
             }
         });
     }
@@ -393,7 +428,12 @@ impl Ctx {
         };
         self.streaming.set(true);
         spawn_local(async move {
-            let body = Regenerate { provider_id, model, params: self.params.get_untracked() };
+            let body = Regenerate {
+                provider_id,
+                model,
+                params: self.params.get_untracked(),
+                tools: self.tools.get_untracked(),
+            };
             self.run_stream(format!("/conversations/{conv_id}/regenerate"), body, None).await;
         });
     }
@@ -422,6 +462,8 @@ impl Ctx {
                         model: RwSignal::new(Some(model)),
                         error: RwSignal::new(None),
                         streaming: RwSignal::new(true),
+                        attachments: StoredValue::new(Vec::new()),
+                        tool_calls: RwSignal::new(Vec::new()),
                     };
                     a.set(Some(view));
                     self.messages.update(|list| {
@@ -446,6 +488,14 @@ impl Ctx {
                         v.content.update(|c| c.push_str(&text));
                     }
                 }
+                StreamEvent::ToolStart { call } | StreamEvent::ToolEnd { call } => {
+                    if let Some(v) = a.get() {
+                        v.tool_calls.update(|list| match list.iter_mut().find(|c| c.id == call.id) {
+                            Some(existing) => *existing = call,
+                            None => list.push(call),
+                        });
+                    }
+                }
                 StreamEvent::Error { message } => {
                     if let Some(v) = a.get() {
                         v.error.set(Some(message.clone()));
@@ -456,6 +506,7 @@ impl Ctx {
                     if let Some(v) = a.get() {
                         v.content.set(message.content);
                         v.error.set(message.error);
+                        v.tool_calls.set(message.tool_calls);
                         v.streaming.set(false);
                     }
                 }
@@ -492,12 +543,90 @@ impl Ctx {
         });
     }
 
-    pub fn start_edit(self, id: i64, text: String) {
+    pub fn start_edit(self, m: MsgView) {
         if self.streaming.get_untracked() {
             return;
         }
-        self.editing.set(Some(id));
-        self.draft.set(text);
+        self.editing.set(Some(m.id));
+        self.draft.set(m.content.get_untracked());
+        let files = m.attachments.get_value();
+        self.pending.set(
+            files
+                .into_iter()
+                .enumerate()
+                .map(|(i, a)| PendingFile { key: i as u32, name: a.name.clone(), att: Some(a) })
+                .collect(),
+        );
+    }
+
+    pub fn cancel_edit(self) {
+        self.editing.set(None);
+        self.draft.set(String::new());
+        self.pending.set(Vec::new());
+    }
+
+    // ---------- attachments & tools ----------
+
+    pub fn add_files(self, files: Vec<web_sys::File>) {
+        for file in files {
+            let key = self.pending.with_untracked(|p| p.iter().map(|f| f.key).max().map_or(0, |k| k + 1));
+            if self.pending.with_untracked(|p| p.len()) >= 10 {
+                self.notify("At most 10 files per message", true);
+                return;
+            }
+            let name = file.name();
+            if file.size() > 20.0 * 1024.0 * 1024.0 {
+                self.notify(format!("{name} is larger than 20 MB"), true);
+                continue;
+            }
+            self.pending.update(|p| p.push(PendingFile { key, name: name.clone(), att: None }));
+            spawn_local(async move {
+                match api::upload(&file).await {
+                    Ok(att) => self.pending.update(|p| {
+                        if let Some(f) = p.iter_mut().find(|f| f.key == key) {
+                            f.att = Some(att);
+                        }
+                    }),
+                    Err(e) => {
+                        self.pending.update(|p| p.retain(|f| f.key != key));
+                        self.notify(format!("{name}: {e}"), true);
+                    }
+                }
+            });
+        }
+    }
+
+    pub fn remove_file(self, key: u32) {
+        let removed = self.pending.with_untracked(|p| p.iter().find(|f| f.key == key).cloned());
+        self.pending.update(|p| p.retain(|f| f.key != key));
+        // Unsent uploads are deleted right away (files reused from an edited message stay).
+        if let Some(att) = removed.and_then(|f| f.att) {
+            if self.editing.get_untracked().is_none() {
+                spawn_local(async move {
+                    let _ = api::call("DELETE", &format!("/uploads/{}", att.id)).await;
+                });
+            }
+        }
+    }
+
+    pub fn set_tools(self, f: impl FnOnce(&mut ToolSelection)) {
+        self.tools.update(f);
+        if let Ok(json) = serde_json::to_string(&self.tools.get_untracked()) {
+            theme::save_pref(TOOLS_KEY, &json);
+        }
+    }
+
+    pub fn load_mcp_servers(self) {
+        spawn_local(async move {
+            if let Ok(list) = api::get::<Vec<McpServer>>("/mcp").await {
+                // Forget selections of servers that no longer exist.
+                let ids: Vec<i64> = list.iter().map(|m| m.id).collect();
+                if self.tools.with_untracked(|t| t.mcp_servers.iter().any(|id| !ids.contains(id))) {
+                    self.set_tools(|t| t.mcp_servers.retain(|id| ids.contains(id)));
+                }
+                self.mcp_servers.set(list);
+            }
+        });
     }
 
     pub fn sign_out(self) {

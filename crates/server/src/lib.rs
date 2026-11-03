@@ -2,12 +2,15 @@
 
 pub mod api;
 pub mod auth;
+pub mod chat;
 pub mod config;
 pub mod crypto;
 pub mod db;
 pub mod devices;
 pub mod error;
 pub mod llm;
+pub mod tools;
+pub mod uploads;
 
 use std::{
     collections::HashMap,
@@ -36,6 +39,7 @@ pub struct Inner {
     pub db: db::Db,
     pub vault: crypto::Vault,
     pub http: reqwest::Client,
+    pub mcp: tools::mcp::McpManager,
     /// Required for the first sign-up; `None` once an account exists.
     pub setup_code: Mutex<Option<String>>,
     /// username -> (failed attempts, time of last failure)
@@ -57,6 +61,7 @@ impl AppState {
                 db,
                 vault,
                 http: llm::http_client(),
+                mcp: tools::mcp::McpManager::default(),
                 setup_code: Mutex::new(setup_code),
                 login_failures: Mutex::new(HashMap::new()),
             }),

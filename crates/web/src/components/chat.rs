@@ -1,5 +1,5 @@
 use leptos::{html, prelude::*};
-use neko_shared::MsgRole;
+use neko_shared::{Attachment, AttachmentKind, MsgRole, ToolCall};
 use wasm_bindgen::JsCast;
 
 use crate::{
@@ -209,6 +209,7 @@ fn MessageItem(m: MsgView) -> impl IntoView {
         util::copy_text(&m.content.get_untracked());
         ctx.notify("Copied", false);
     };
+    let files = m.attachments.get_value();
 
     view! {
         <article
@@ -220,20 +221,44 @@ fn MessageItem(m: MsgView) -> impl IntoView {
         >
             <Show when=move || !is_user>
                 <div class="msg-meta">
-                    <span class="msg-avatar"><Icon svg=icons::PAW size=14 /></span>
+                    <span class="msg-avatar">
+                        <Icon svg=icons::PAW size=14 />
+                    </span>
                     <span class="msg-model">{move || m.model.get().unwrap_or_else(|| "assistant".into())}</span>
                 </div>
             </Show>
-            <div class="msg-body">
-                <Show when=move || m.streaming.get() && m.content.with(|c| c.is_empty())>
-                    <div class="typing" aria-label="Thinking"><span></span><span></span><span></span></div>
-                </Show>
-                <div class="md" inner_html=move || html.get()></div>
-                {move || m.error.get().map(|e| {
-                    let stopped = e == "Stopped";
-                    view! { <div class="msg-error" class:soft=stopped>{if stopped { "⏹ Stopped".to_string() } else { format!("⚠ {e}") }}</div> }
-                })}
-            </div>
+            {(!files.is_empty()).then(|| view! { <AttachmentList files=files.clone() /> })}
+            <Show when=move || m.tool_calls.with(|c| !c.is_empty())>
+                <div class="tool-list">
+                    <For each=move || m.tool_calls.get() key=|c| (c.id.clone(), c.done) let:call>
+                        <ToolCard call=call />
+                    </For>
+                </div>
+            </Show>
+            <Show when=move || is_user || !m.content.with(|c| c.is_empty()) || m.streaming.get() || m.error.with(|e| e.is_some())>
+                <div class="msg-body">
+                    <Show when=move || m.streaming.get() && m.content.with(|c| c.is_empty())>
+                        <div class="typing" aria-label="Thinking">
+                            <span></span>
+                            <span></span>
+                            <span></span>
+                        </div>
+                    </Show>
+                    <div class="md" inner_html=move || html.get()></div>
+                    {move || {
+                        m.error
+                            .get()
+                            .map(|e| {
+                                let stopped = e == "Stopped";
+                                view! {
+                                    <div class="msg-error" class:soft=stopped>
+                                        {if stopped { "⏹ Stopped".to_string() } else { format!("⚠ {e}") }}
+                                    </div>
+                                }
+                            })
+                    }}
+                </div>
+            </Show>
             <Show when=move || !m.streaming.get()>
                 <div class="msg-actions">
                     <button class="icon-btn small" title="Copy" aria-label="Copy message" on:click=copy>
@@ -245,7 +270,7 @@ fn MessageItem(m: MsgView) -> impl IntoView {
                             title="Edit & resend"
                             aria-label="Edit message"
                             disabled=move || ctx.streaming.get()
-                            on:click=move |_| ctx.start_edit(m.id, m.content.get_untracked())
+                            on:click=move |_| ctx.start_edit(m)
                         >
                             <Icon svg=icons::EDIT size=15 />
                         </button>
@@ -264,6 +289,85 @@ fn MessageItem(m: MsgView) -> impl IntoView {
                 </div>
             </Show>
         </article>
+    }
+}
+
+/// Thumbnails for images, chips for other files. Images open full size in a new tab.
+#[component]
+fn AttachmentList(files: Vec<Attachment>) -> impl IntoView {
+    view! {
+        <div class="attachments">
+            {files
+                .into_iter()
+                .map(|f| {
+                    let url = format!("/api/uploads/{}", f.id);
+                    let (href, title) = (url.clone(), f.name.clone());
+                    if f.kind == AttachmentKind::Image {
+                        view! {
+                            <a class="thumb" href=href target="_blank" rel="noopener" title=title>
+                                <img src=url alt=f.name loading="lazy" />
+                            </a>
+                        }
+                            .into_any()
+                    } else {
+                        view! {
+                            <a class="file-chip" href=url download=title.clone() title=title>
+                                <Icon svg=if f.kind == AttachmentKind::Pdf { icons::PDF } else { icons::FILE } size=15 />
+                                <span>{f.name}</span>
+                                <span class="muted small">{util::file_size(f.size)}</span>
+                            </a>
+                        }
+                            .into_any()
+                    }
+                })
+                .collect_view()}
+        </div>
+    }
+}
+
+/// One tool the model used: what it asked for, and (expandable) what came back.
+#[component]
+fn ToolCard(call: ToolCall) -> impl IntoView {
+    let args: serde_json::Value = serde_json::from_str(&call.arguments).unwrap_or_default();
+    let headline = match call.name.as_str() {
+        "web_search" => args["query"].as_str().map(|q| format!("“{q}”")),
+        "fetch_url" => args["url"].as_str().map(str::to_string),
+        _ => args.as_object().and_then(|o| o.values().find_map(|v| v.as_str().map(|s| s.to_string()))),
+    }
+    .unwrap_or_default();
+    let icon = match call.name.as_str() {
+        "web_search" => icons::SEARCH,
+        "fetch_url" => icons::GLOBE,
+        _ => icons::WRENCH,
+    };
+    let status = if !call.done {
+        "running"
+    } else if call.is_error {
+        "error"
+    } else {
+        "ok"
+    };
+    let pretty_args = serde_json::to_string_pretty(&args).unwrap_or_else(|_| call.arguments.clone());
+    let has_args = !call.name.is_empty();
+    view! {
+        <details class="tool-card" data-status=status>
+            <summary>
+                <span class="tool-icon">
+                    <Icon svg=icon size=15 />
+                </span>
+                <span class="tool-label">{call.label}</span>
+                <span class="tool-headline">{headline}</span>
+                <span class="tool-status">
+                    {match status {
+                        "running" => view! { <span class="spinner"></span> }.into_any(),
+                        "error" => view! { <span>"⚠"</span> }.into_any(),
+                        _ => view! { <span>"✓"</span> }.into_any(),
+                    }}
+                </span>
+            </summary>
+            {has_args.then(|| view! { <pre class="tool-pre">{pretty_args}</pre> })}
+            {(!call.result.is_empty()).then(|| view! { <pre class="tool-pre result">{call.result}</pre> })}
+        </details>
     }
 }
 
@@ -376,9 +480,109 @@ fn ModelPicker() -> impl IntoView {
 }
 
 #[component]
+fn ToolsMenu() -> impl IntoView {
+    let ctx = expect_context::<Ctx>();
+    let open = RwSignal::new(false);
+    let count = move || ctx.tools.with(|t| t.web_search as usize + t.fetch_url as usize + t.mcp_servers.len());
+    let servers = move || ctx.mcp_servers.get().into_iter().filter(|m| m.enabled).collect::<Vec<_>>();
+    view! {
+        <div class="tools-menu">
+            <button
+                type="button"
+                class="icon-btn small"
+                class:active=move || { count() > 0 }
+                title="Tools"
+                aria-label="Tools"
+                aria-expanded=move || open.get().to_string()
+                on:click=move |_| open.update(|o| *o = !*o)
+            >
+                <Icon svg=icons::WRENCH size=16 />
+                <Show when=move || { count() > 0 }>
+                    <span class="badge">{count}</span>
+                </Show>
+            </button>
+            <Show when=move || open.get()>
+                <div class="popover-scrim" on:click=move |_| open.set(false)></div>
+                <div class="popover" role="menu">
+                    <p class="popover-title">"Let the AI use"</p>
+                    <label class="check">
+                        <input
+                            type="checkbox"
+                            prop:checked=move || ctx.tools.with(|t| t.web_search)
+                            on:change=move |ev| {
+                                let on = event_target_checked(&ev);
+                                ctx.set_tools(|t| t.web_search = on);
+                            }
+                        />
+                        <Icon svg=icons::SEARCH size=15 />
+                        "Web search"
+                    </label>
+                    <label class="check">
+                        <input
+                            type="checkbox"
+                            prop:checked=move || ctx.tools.with(|t| t.fetch_url)
+                            on:change=move |ev| {
+                                let on = event_target_checked(&ev);
+                                ctx.set_tools(|t| t.fetch_url = on);
+                            }
+                        />
+                        <Icon svg=icons::GLOBE size=15 />
+                        "Read web pages"
+                    </label>
+                    <For
+                        each=servers
+                        key=|m| (m.id, m.name.clone())
+                        let:m
+                    >
+                        {
+                            let id = m.id;
+                            view! {
+                                <label class="check">
+                                    <input
+                                        type="checkbox"
+                                        prop:checked=move || ctx.tools.with(|t| t.mcp_servers.contains(&id))
+                                        on:change=move |ev| {
+                                            let on = event_target_checked(&ev);
+                                            ctx.set_tools(|t| {
+                                                t.mcp_servers.retain(|x| *x != id);
+                                                if on {
+                                                    t.mcp_servers.push(id);
+                                                }
+                                            });
+                                        }
+                                    />
+                                    <Icon svg=icons::WRENCH size=15 />
+                                    {m.name}
+                                </label>
+                            }
+                        }
+                    </For>
+                    <button
+                        class="btn small ghost wide"
+                        on:click=move |_| {
+                            open.set(false);
+                            ctx.settings.set(Some(SettingsTab::Tools));
+                        }
+                    >
+                        "Configure tools & MCP…"
+                    </button>
+                </div>
+            </Show>
+        </div>
+    }
+}
+
+fn files_from(list: Option<web_sys::FileList>) -> Vec<web_sys::File> {
+    let Some(list) = list else { return Vec::new() };
+    (0..list.length()).filter_map(|i| list.get(i)).collect()
+}
+
+#[component]
 fn Composer() -> impl IntoView {
     let ctx = expect_context::<Ctx>();
     let input = NodeRef::<html::Textarea>::new();
+    let file_input = NodeRef::<html::Input>::new();
+    let dragging = RwSignal::new(false);
 
     // Auto-grow the textarea with its content (also when the draft is set programmatically).
     Effect::new(move |_| {
@@ -392,7 +596,7 @@ fn Composer() -> impl IntoView {
             }
         });
     });
-    // Focus the box when editing starts or a suggestion is picked.
+    // Focus the box when editing starts.
     Effect::new(move |prev: Option<Option<i64>>| {
         let editing = ctx.editing.get();
         if prev.is_some() && editing.is_some() {
@@ -404,6 +608,10 @@ fn Composer() -> impl IntoView {
     });
 
     let submit = move || ctx.send(ctx.draft.get_untracked());
+    let can_send = move || {
+        ctx.pending.with(|p| p.iter().all(|f| f.att.is_some()))
+            && (ctx.draft.with(|d| !d.trim().is_empty()) || ctx.pending.with(|p| !p.is_empty()))
+    };
 
     view! {
         <div class="composer-wrap">
@@ -411,32 +619,87 @@ fn Composer() -> impl IntoView {
                 <div class="edit-banner">
                     <Icon svg=icons::EDIT size=14 />
                     "Editing — sending replaces this message and everything after it"
-                    <button
-                        class="icon-btn small"
-                        aria-label="Cancel edit"
-                        on:click=move |_| {
-                            ctx.editing.set(None);
-                            ctx.draft.set(String::new());
-                        }
-                    >
+                    <button class="icon-btn small" aria-label="Cancel edit" on:click=move |_| ctx.cancel_edit()>
                         <Icon svg=icons::X size=14 />
                     </button>
                 </div>
             </Show>
             <form
                 class="composer"
+                class:dragging=move || dragging.get()
                 on:submit=move |ev| {
                     ev.prevent_default();
                     submit();
                 }
+                on:dragover=move |ev: web_sys::DragEvent| {
+                    ev.prevent_default();
+                    dragging.set(true);
+                }
+                on:dragleave=move |_| dragging.set(false)
+                on:drop=move |ev: web_sys::DragEvent| {
+                    ev.prevent_default();
+                    dragging.set(false);
+                    ctx.add_files(files_from(ev.data_transfer().and_then(|d| d.files())));
+                }
             >
+                <Show when=move || ctx.pending.with(|p| !p.is_empty())>
+                    <div class="pending-files">
+                        <For each=move || ctx.pending.get() key=|f| (f.key, f.att.is_some()) let:f>
+                            {
+                                let key = f.key;
+                                let thumb = f
+                                    .att
+                                    .as_ref()
+                                    .filter(|a| a.kind == AttachmentKind::Image)
+                                    .map(|a| format!("/api/uploads/{}", a.id));
+                                view! {
+                                    <div class="pending-file" class:uploading=f.att.is_none()>
+                                        {match thumb {
+                                            Some(src) => view! { <img src=src alt="" /> }.into_any(),
+                                            None => {
+                                                view! {
+                                                    <span class="pending-icon">
+                                                        {if f.att.is_none() {
+                                                            view! { <span class="spinner"></span> }.into_any()
+                                                        } else {
+                                                            view! { <Icon svg=icons::FILE size=16 /> }.into_any()
+                                                        }}
+                                                    </span>
+                                                }
+                                                    .into_any()
+                                            }
+                                        }}
+                                        <span class="pending-name">{f.name.clone()}</span>
+                                        <button
+                                            type="button"
+                                            class="icon-btn small"
+                                            aria-label="Remove file"
+                                            on:click=move |_| ctx.remove_file(key)
+                                        >
+                                            <Icon svg=icons::X size=13 />
+                                        </button>
+                                    </div>
+                                }
+                            }
+                        </For>
+                    </div>
+                </Show>
                 <textarea
                     node_ref=input
                     rows="1"
-                    placeholder=move || if ctx.theme.mode.get() == Mode::Cyber { "$ ask anything…" } else { "Message Neko…" }
+                    placeholder=move || {
+                        if ctx.theme.mode.get() == Mode::Cyber { "$ ask anything…" } else { "Message Neko…" }
+                    }
                     aria-label="Message"
                     prop:value=move || ctx.draft.get()
                     on:input=move |ev| ctx.draft.set(event_target_value(&ev))
+                    on:paste=move |ev: web_sys::ClipboardEvent| {
+                        let files = files_from(ev.clipboard_data().and_then(|d| d.files()));
+                        if !files.is_empty() {
+                            ev.prevent_default();
+                            ctx.add_files(files);
+                        }
+                    }
                     on:keydown=move |ev| {
                         // Enter sends on desktop; on phones Enter makes a new line and the button sends.
                         if ev.key() == "Enter" && !ev.shift_key() && !ev.is_composing() && !util::is_touch() {
@@ -446,18 +709,42 @@ fn Composer() -> impl IntoView {
                     }
                 ></textarea>
                 <div class="composer-bar">
+                    <input
+                        node_ref=file_input
+                        type="file"
+                        multiple
+                        hidden
+                        accept="image/png,image/jpeg,image/gif,image/webp,application/pdf,text/*,.md,.csv,.json,.rs,.py,.js,.ts,.go,.java,.c,.cpp,.h,.toml,.yaml,.yml,.sh,.sql,.html,.css,.xml,.log"
+                        on:change=move |_| {
+                            if let Some(el) = file_input.get_untracked() {
+                                ctx.add_files(files_from(el.files()));
+                                el.set_value("");
+                            }
+                        }
+                    />
+                    <button
+                        type="button"
+                        class="icon-btn small"
+                        title="Attach files (or paste / drop)"
+                        aria-label="Attach files"
+                        on:click=move |_| {
+                            if let Some(el) = file_input.get_untracked() {
+                                el.click();
+                            }
+                        }
+                    >
+                        <Icon svg=icons::CLIP size=16 />
+                    </button>
+                    <ToolsMenu />
                     <ModelPicker />
                     <Show
                         when=move || ctx.streaming.get()
-                        fallback=move || view! {
-                            <button
-                                class="send-btn"
-                                type="submit"
-                                aria-label="Send"
-                                disabled=move || ctx.draft.with(|d| d.trim().is_empty())
-                            >
-                                <Icon svg=icons::SEND />
-                            </button>
+                        fallback=move || {
+                            view! {
+                                <button class="send-btn" type="submit" aria-label="Send" disabled=move || !can_send()>
+                                    <Icon svg=icons::SEND />
+                                </button>
+                            }
                         }
                     >
                         <button class="send-btn stop" type="button" aria-label="Stop" on:click=move |_| ctx.stop()>

@@ -27,7 +27,17 @@ async fn main() -> anyhow::Result<()> {
         tokio::net::TcpListener::bind(config.bind).await.with_context(|| format!("binding {}", config.bind))?;
     print_banner(&config, setup_code.as_deref());
 
-    let app = neko_server::router(AppState::new(config, db, vault, setup_code));
+    let state = AppState::new(config, db, vault, setup_code);
+    // Hourly cleanup of uploads that were never sent.
+    let sweeper = state.clone();
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(3600));
+        loop {
+            tick.tick().await;
+            neko_server::uploads::sweep(&sweeper).await;
+        }
+    });
+    let app = neko_server::router(state);
     axum::serve(listener, app).with_graceful_shutdown(shutdown_signal()).await?;
     Ok(())
 }

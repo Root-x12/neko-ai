@@ -38,6 +38,18 @@ pub const PALETTE: &str = svg(
     r#"<path d="M12 3a9 9 0 1 0 0 18c1.1 0 1.6-.8 1.6-1.6 0-.5-.2-.8-.5-1.2-.3-.3-.4-.7-.4-1.1 0-.9.7-1.6 1.6-1.6H16a5 5 0 0 0 5-5c0-4.1-4-7.5-9-7.5z"/><circle cx="7.5" cy="11" r="1"/><circle cx="10.5" cy="7.5" r="1"/><circle cx="15" cy="8" r="1"/>"#,
 );
 pub const USER: &str = svg(r#"<circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/>"#);
+pub const CLIP: &str = svg(
+    r#"<path d="m21 11-8.6 8.6a5 5 0 0 1-7-7l8.5-8.6a3.3 3.3 0 0 1 4.7 4.7L10 17.3a1.7 1.7 0 0 1-2.4-2.4l7.9-7.9"/>"#,
+);
+pub const WRENCH: &str = svg(
+    r#"<path d="M14.7 6.3a4 4 0 0 0 5 5L21 13l-8 8-3-3 1.7-1.7a4 4 0 0 0-5-5L3 7.6 7.6 3l3.7 3.7a4 4 0 0 0 3.4-.4z"/>"#,
+);
+pub const GLOBE: &str =
+    svg(r#"<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>"#);
+pub const FILE: &str =
+    svg(r#"<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/>"#);
+pub const PDF: &str =
+    svg(r#"<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 15h8M8 18h5"/>"#);
 
 #[component]
 pub fn Icon(#[prop(into)] svg: &'static str, #[prop(optional)] size: Option<u32>) -> impl IntoView {

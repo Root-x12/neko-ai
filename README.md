@@ -11,7 +11,7 @@ It works on your computer and your phone, and your chats sync between them.
 
 Each mode has a light and a dark version. There's an animated cat mascot that blinks and wags its tail, "thinks" while the AI answers, and dozes off when the app is idle. It wears a scanning visor in Cyber mode.
 
-## Features (Phase 1)
+## Features
 
 | | |
 |---|---|
@@ -21,6 +21,9 @@ Each mode has a light and a dark version. There's an animated cat mascot that bl
 | **History** | Every chat is saved; full-text search across titles and messages; rename and delete |
 | **Accounts** | Sign-up and sign-in, admin/user roles, a one-time setup code for the first admin, login rate limiting |
 | **Devices** | Address and QR code to open on your phone, list of signed-in devices, remote sign-out, installable as an app |
+| **Tools** | Web search (DuckDuckGo with no key, SearXNG, Brave, Tavily) and page reading, switched on per chat. The AI calls them by itself and each call shows as an expandable card |
+| **MCP** | Plug in any MCP server: remote over Streamable HTTP (with encrypted auth headers) or a local command over stdio (admin only) |
+| **Files** | Attach images, PDFs and text/code files by clicking, pasting or dragging. Images and PDFs go to the model natively where the provider supports it, otherwise as extracted text |
 | **Privacy** | No telemetry, no CDNs, no external fonts. API keys are encrypted at rest (ChaCha20-Poly1305) and never sent back to the browser |
 
 ## Quick start
@@ -59,6 +62,7 @@ To keep it on this computer only, run with `NEKO_BIND=127.0.0.1:8080`.
 | `NEKO_ALLOW_SIGNUP` | `false` | Let others create accounts after the admin |
 | `NEKO_SECURE_COOKIES` | `false` | Mark the session cookie `Secure` (use with HTTPS) |
 | `NEKO_SECRET_KEY` | *(generated)* | Base64 32-byte key for encrypting API keys; otherwise `data/secret.key` is created |
+| `NEKO_FETCH_ALLOW_PRIVATE` | `false` | Let the page-reading tool open LAN/localhost addresses (off so a prompt-injected model can't probe your network) |
 | `RUST_LOG` | `info` | Log level |
 
 **Back up `data/`**. If you lose `secret.key`, the stored API keys can no longer be decrypted (chats are unaffected).
@@ -72,10 +76,18 @@ cargo run -p neko-server                                # API on :8080
 cd crates/web && trunk serve                            # UI with hot reload on :8081, proxies /api
 ```
 
+### Adding an MCP server
+
+**Settings → Tools → Add MCP server**, then tick it in the wrench menu next to the message box.
+
+- **Remote:** paste the server URL (for example `https://mcp.example.com/mcp`) and any auth header, such as `Authorization: Bearer …`.
+- **Local (admin only):** command `npx`, with the arguments `-y`, `@modelcontextprotocol/server-filesystem` and `/path/to/folder`, one per line.
+
 ```
 crates/
   shared/   types shared by server & web, SSE parser
-  server/   Axum API, SQLite (FTS5 search), auth, provider adapters, streaming
+  server/   Axum API, SQLite (FTS5 search), auth, provider adapters, streaming,
+            tool loop (chat.rs), web tools + MCP client (tools/), uploads
   web/      Leptos UI, themes (style/main.css), mascot, PWA assets
 ```
 
@@ -83,7 +95,7 @@ crates/
 
 1. ✅ Core: providers, streaming, Markdown and code, history and search, model switching, parameters, auth
 2. ✅ Themes and devices: Neko/Cyber, palettes, light/dark, phone layout, device sessions
-3. Tools: MCP client, web search and URL fetch toggles, PDF and image uploads
+3. ✅ Tools: MCP client, web search and URL fetch toggles, PDF and image uploads
 4. Canvas: HTML, SVG, Mermaid and React previews in a side panel
 5. Security: PII and secret detection before sending, prompt-injection scanning, audit logs, team roles, model allowlists, retention policies
 6. Extras: export to Markdown/PDF/JSON, memory across chats, RAG over your files

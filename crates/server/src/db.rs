@@ -7,8 +7,8 @@ use std::{
 };
 
 use neko_shared::{
-    ChatParams, Conversation, ConversationSummary, DeviceSession, Message, MsgRole, Provider, ProviderKind, Role,
-    SearchHit, User,
+    Attachment, AttachmentKind, ChatParams, Conversation, ConversationSummary, DeviceSession, McpServer, McpTransport,
+    Message, MsgRole, Provider, ProviderKind, Role, SearchBackend, SearchHit, SearchSettings, ToolCall, User,
 };
 use rusqlite::{params, Connection, OptionalExtension, Row};
 
@@ -23,7 +23,8 @@ pub fn now() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
 
-const MIGRATIONS: &[&str] = &[r#"
+const MIGRATIONS: &[&str] = &[
+    r#"
 CREATE TABLE users (
     id            INTEGER PRIMARY KEY,
     username      TEXT NOT NULL UNIQUE COLLATE NOCASE,
@@ -86,7 +87,46 @@ CREATE TRIGGER messages_au AFTER UPDATE OF content ON messages BEGIN
     INSERT INTO messages_fts(messages_fts, rowid, content) VALUES ('delete', old.id, old.content);
     INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
 END;
-"#];
+"#,
+    r#"
+ALTER TABLE messages ADD COLUMN tool_calls TEXT NOT NULL DEFAULT '[]';
+CREATE TABLE attachments (
+    id         INTEGER PRIMARY KEY,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL,
+    name       TEXT NOT NULL,
+    mime       TEXT NOT NULL,
+    kind       TEXT NOT NULL,
+    size       INTEGER NOT NULL,
+    path       TEXT NOT NULL,
+    text       TEXT,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX attachments_message ON attachments(message_id);
+CREATE TABLE search_settings (
+    user_id     INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    backend     TEXT NOT NULL,
+    base_url    TEXT NOT NULL DEFAULT '',
+    api_key_enc BLOB,
+    key_hint    TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE mcp_servers (
+    id           INTEGER PRIMARY KEY,
+    user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name         TEXT NOT NULL,
+    transport    TEXT NOT NULL,
+    url          TEXT NOT NULL DEFAULT '',
+    command      TEXT NOT NULL DEFAULT '',
+    args         TEXT NOT NULL DEFAULT '[]',
+    headers_enc  BLOB,
+    env_enc      BLOB,
+    header_names TEXT NOT NULL DEFAULT '[]',
+    env_names    TEXT NOT NULL DEFAULT '[]',
+    enabled      INTEGER NOT NULL DEFAULT 1,
+    created_at   INTEGER NOT NULL
+);
+"#,
+];
 
 impl Db {
     pub fn open(path: &Path) -> anyhow::Result<Self> {
@@ -327,8 +367,12 @@ fn message_from_row(r: &Row) -> DbResult<Message> {
         model: r.get(4)?,
         error: r.get(5)?,
         created_at: r.get(6)?,
+        attachments: Vec::new(),
+        tool_calls: serde_json::from_str(&r.get::<_, String>(7)?).unwrap_or_default(),
     })
 }
+
+const MESSAGE_COLS: &str = "id, role, content, provider_id, model, error, created_at, tool_calls";
 
 pub fn list_conversations(c: &Connection, user_id: i64) -> DbResult<Vec<ConversationSummary>> {
     let mut st = c.prepare(
@@ -374,10 +418,14 @@ pub fn get_conversation(c: &Connection, user_id: i64, id: i64) -> DbResult<Optio
         )
         .optional()?;
     let Some(mut conv) = conv else { return Ok(None) };
-    let mut st = c.prepare(
-        "SELECT id, role, content, provider_id, model, error, created_at FROM messages WHERE conversation_id = ?1 ORDER BY id",
-    )?;
+    let mut st = c.prepare(&format!("SELECT {MESSAGE_COLS} FROM messages WHERE conversation_id = ?1 ORDER BY id"))?;
     conv.messages = st.query_map([id], message_from_row)?.collect::<DbResult<_>>()?;
+    let mut by_message = conversation_attachments(c, id)?;
+    for m in &mut conv.messages {
+        if let Some(list) = by_message.remove(&m.id) {
+            m.attachments = list.into_iter().map(|a| a.info).collect();
+        }
+    }
     Ok(Some(conv))
 }
 
@@ -400,8 +448,25 @@ pub fn set_conversation_params(c: &Connection, user_id: i64, id: i64, p: &ChatPa
     )? > 0)
 }
 
-pub fn delete_conversation(c: &Connection, user_id: i64, id: i64) -> DbResult<bool> {
-    Ok(c.execute("DELETE FROM conversations WHERE id = ?1 AND user_id = ?2", params![id, user_id])? > 0)
+/// Deletes a conversation and its attachments. Returns `None` if it doesn't exist, otherwise the
+/// attachment file paths to remove from disk.
+pub fn delete_conversation(c: &mut Connection, user_id: i64, id: i64) -> DbResult<Option<Vec<String>>> {
+    let tx = c.transaction()?;
+    let paths: Vec<String> = {
+        let mut st = tx.prepare(
+            "SELECT a.path FROM attachments a JOIN messages m ON m.id = a.message_id
+             JOIN conversations c ON c.id = m.conversation_id WHERE c.id = ?1 AND c.user_id = ?2",
+        )?;
+        let rows = st.query_map(params![id, user_id], |r| r.get(0))?;
+        rows.collect::<DbResult<_>>()?
+    };
+    tx.execute(
+        "DELETE FROM attachments WHERE message_id IN (SELECT m.id FROM messages m JOIN conversations c ON c.id = m.conversation_id WHERE c.id = ?1 AND c.user_id = ?2)",
+        params![id, user_id],
+    )?;
+    let n = tx.execute("DELETE FROM conversations WHERE id = ?1 AND user_id = ?2", params![id, user_id])?;
+    tx.commit()?;
+    Ok((n > 0).then_some(paths))
 }
 
 pub fn touch_conversation(c: &Connection, id: i64) -> DbResult<()> {
@@ -431,17 +496,334 @@ pub fn insert_message(
         model: model.map(str::to_string),
         error: None,
         created_at: t,
+        attachments: Vec::new(),
+        tool_calls: Vec::new(),
     })
 }
 
-pub fn finish_message(c: &Connection, id: i64, content: &str, error: Option<&str>) -> DbResult<Option<Message>> {
-    c.execute("UPDATE messages SET content = ?2, error = ?3 WHERE id = ?1", params![id, content, error])?;
+pub fn finish_message(
+    c: &Connection,
+    id: i64,
+    content: &str,
+    error: Option<&str>,
+    tool_calls: &[ToolCall],
+) -> DbResult<Option<Message>> {
+    let calls = serde_json::to_string(tool_calls).unwrap_or_else(|_| "[]".into());
+    c.execute(
+        "UPDATE messages SET content = ?2, error = ?3, tool_calls = ?4 WHERE id = ?1",
+        params![id, content, error, calls],
+    )?;
+    c.query_row(&format!("SELECT {MESSAGE_COLS} FROM messages WHERE id = ?1"), [id], message_from_row).optional()
+}
+
+// ---------- attachments ----------
+
+#[derive(Debug, Clone)]
+pub struct AttachmentRecord {
+    pub info: Attachment,
+    pub path: String,
+    pub text: Option<String>,
+    pub message_id: Option<i64>,
+}
+
+const ATTACHMENT_COLS: &str = "a.id, a.name, a.mime, a.kind, a.size, a.path, a.text, a.message_id";
+
+fn attachment_from_row(r: &Row) -> DbResult<AttachmentRecord> {
+    Ok(AttachmentRecord {
+        info: Attachment {
+            id: r.get(0)?,
+            name: r.get(1)?,
+            mime: r.get(2)?,
+            kind: match r.get::<_, String>(3)?.as_str() {
+                "image" => AttachmentKind::Image,
+                "pdf" => AttachmentKind::Pdf,
+                _ => AttachmentKind::Text,
+            },
+            size: r.get(4)?,
+        },
+        path: r.get(5)?,
+        text: r.get(6)?,
+        message_id: r.get(7)?,
+    })
+}
+
+fn kind_str(k: AttachmentKind) -> &'static str {
+    match k {
+        AttachmentKind::Image => "image",
+        AttachmentKind::Pdf => "pdf",
+        AttachmentKind::Text => "text",
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn insert_attachment(
+    c: &Connection,
+    user_id: i64,
+    name: &str,
+    mime: &str,
+    kind: AttachmentKind,
+    size: i64,
+    path: &str,
+    text: Option<&str>,
+) -> DbResult<Attachment> {
+    c.execute(
+        "INSERT INTO attachments (user_id, name, mime, kind, size, path, text, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![user_id, name, mime, kind_str(kind), size, path, text, now()],
+    )?;
+    Ok(Attachment { id: c.last_insert_rowid(), name: name.to_string(), mime: mime.to_string(), kind, size })
+}
+
+pub fn get_attachment(c: &Connection, user_id: i64, id: i64) -> DbResult<Option<AttachmentRecord>> {
     c.query_row(
-        "SELECT id, role, content, provider_id, model, error, created_at FROM messages WHERE id = ?1",
-        [id],
-        message_from_row,
+        &format!("SELECT {ATTACHMENT_COLS} FROM attachments a WHERE a.id = ?1 AND a.user_id = ?2"),
+        params![id, user_id],
+        attachment_from_row,
     )
     .optional()
+}
+
+/// Links uploaded files to a message. Only the owner's files that aren't attached elsewhere qualify.
+pub fn link_attachments(c: &Connection, user_id: i64, ids: &[i64], message_id: i64) -> DbResult<usize> {
+    let mut n = 0;
+    for id in ids {
+        n += c.execute(
+            "UPDATE attachments SET message_id = ?3, created_at = ?4 WHERE id = ?1 AND user_id = ?2 AND message_id IS NULL",
+            params![id, user_id, message_id, now()],
+        )?;
+    }
+    Ok(n)
+}
+
+pub fn conversation_attachments(
+    c: &Connection,
+    conversation_id: i64,
+) -> DbResult<std::collections::HashMap<i64, Vec<AttachmentRecord>>> {
+    let mut st = c.prepare(&format!(
+        "SELECT {ATTACHMENT_COLS} FROM attachments a JOIN messages m ON m.id = a.message_id WHERE m.conversation_id = ?1 ORDER BY a.id"
+    ))?;
+    let mut map: std::collections::HashMap<i64, Vec<AttachmentRecord>> = Default::default();
+    for rec in st.query_map([conversation_id], attachment_from_row)? {
+        let rec = rec?;
+        if let Some(mid) = rec.message_id {
+            map.entry(mid).or_default().push(rec);
+        }
+    }
+    Ok(map)
+}
+
+pub fn delete_attachment(c: &Connection, user_id: i64, id: i64) -> DbResult<Option<String>> {
+    let path: Option<String> = c
+        .query_row(
+            "SELECT path FROM attachments WHERE id = ?1 AND user_id = ?2 AND message_id IS NULL",
+            params![id, user_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if path.is_some() {
+        c.execute("DELETE FROM attachments WHERE id = ?1", [id])?;
+    }
+    Ok(path)
+}
+
+/// Removes uploads that were never sent (or whose message was deleted) before `cutoff`.
+pub fn sweep_orphan_attachments(c: &Connection, cutoff: i64) -> DbResult<Vec<String>> {
+    let mut st = c.prepare("SELECT path FROM attachments WHERE message_id IS NULL AND created_at < ?1")?;
+    let paths: Vec<String> = st.query_map([cutoff], |r| r.get(0))?.collect::<DbResult<_>>()?;
+    c.execute("DELETE FROM attachments WHERE message_id IS NULL AND created_at < ?1", [cutoff])?;
+    Ok(paths)
+}
+
+pub fn all_attachment_paths(c: &Connection) -> DbResult<std::collections::HashSet<String>> {
+    let mut st = c.prepare("SELECT path FROM attachments")?;
+    let rows = st.query_map([], |r| r.get(0))?;
+    rows.collect()
+}
+
+// ---------- search settings ----------
+
+pub struct SearchRecord {
+    pub settings: SearchSettings,
+    pub api_key_enc: Option<Vec<u8>>,
+}
+
+pub fn search_settings_record(c: &Connection, user_id: i64) -> DbResult<SearchRecord> {
+    let rec = c
+        .query_row(
+            "SELECT backend, base_url, api_key_enc, key_hint FROM search_settings WHERE user_id = ?1",
+            [user_id],
+            |r| {
+                let enc: Option<Vec<u8>> = r.get(2)?;
+                Ok(SearchRecord {
+                    settings: SearchSettings {
+                        backend: SearchBackend::parse(&r.get::<_, String>(0)?),
+                        base_url: r.get(1)?,
+                        has_key: enc.is_some(),
+                        key_hint: r.get(3)?,
+                    },
+                    api_key_enc: enc,
+                })
+            },
+        )
+        .optional()?;
+    Ok(rec.unwrap_or(SearchRecord { settings: SearchSettings::default(), api_key_enc: None }))
+}
+
+/// `key`: `None` keeps the stored key, `Some(None)` clears it.
+pub fn save_search_settings(
+    c: &Connection,
+    user_id: i64,
+    backend: SearchBackend,
+    base_url: &str,
+    key: Option<Option<(Vec<u8>, String)>>,
+) -> DbResult<()> {
+    c.execute(
+        "INSERT INTO search_settings (user_id, backend, base_url) VALUES (?1, ?2, ?3)
+         ON CONFLICT(user_id) DO UPDATE SET backend = excluded.backend, base_url = excluded.base_url",
+        params![user_id, backend.as_str(), base_url],
+    )?;
+    if let Some(key) = key {
+        let (enc, hint) = key.map(|(e, h)| (Some(e), h)).unwrap_or((None, String::new()));
+        c.execute(
+            "UPDATE search_settings SET api_key_enc = ?2, key_hint = ?3 WHERE user_id = ?1",
+            params![user_id, enc, hint],
+        )?;
+    }
+    Ok(())
+}
+
+// ---------- MCP servers ----------
+
+pub struct McpRecord {
+    pub server: McpServer,
+    pub headers_enc: Option<Vec<u8>>,
+    pub env_enc: Option<Vec<u8>>,
+}
+
+impl McpRecord {
+    pub fn decrypt(&self, vault: &crate::crypto::Vault) -> Result<crate::tools::mcp::McpConfig, String> {
+        let open = |b: &Option<Vec<u8>>| -> Result<Vec<(String, String)>, String> {
+            match b {
+                Some(b) => {
+                    serde_json::from_str(&vault.decrypt(b).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+                }
+                None => Ok(Vec::new()),
+            }
+        };
+        Ok(crate::tools::mcp::McpConfig {
+            id: self.server.id,
+            name: self.server.name.clone(),
+            transport: self.server.transport,
+            url: self.server.url.clone(),
+            headers: open(&self.headers_enc)?,
+            command: self.server.command.clone(),
+            args: self.server.args.clone(),
+            env: open(&self.env_enc)?,
+        })
+    }
+}
+
+const MCP_COLS: &str =
+    "id, name, transport, url, command, args, header_names, env_names, enabled, headers_enc, env_enc";
+
+fn mcp_from_row(r: &Row) -> DbResult<McpRecord> {
+    let json_list =
+        |i: usize| -> DbResult<Vec<String>> { Ok(serde_json::from_str(&r.get::<_, String>(i)?).unwrap_or_default()) };
+    Ok(McpRecord {
+        server: McpServer {
+            id: r.get(0)?,
+            name: r.get(1)?,
+            transport: McpTransport::parse(&r.get::<_, String>(2)?),
+            url: r.get(3)?,
+            command: r.get(4)?,
+            args: json_list(5)?,
+            header_names: json_list(6)?,
+            env_names: json_list(7)?,
+            enabled: r.get(8)?,
+        },
+        headers_enc: r.get(9)?,
+        env_enc: r.get(10)?,
+    })
+}
+
+pub fn list_mcp_servers(c: &Connection, user_id: i64) -> DbResult<Vec<McpServer>> {
+    let mut st = c.prepare(&format!("SELECT {MCP_COLS} FROM mcp_servers WHERE user_id = ?1 ORDER BY id"))?;
+    let rows = st.query_map([user_id], |r| mcp_from_row(r).map(|m| m.server))?;
+    rows.collect()
+}
+
+pub fn get_mcp_record(c: &Connection, user_id: i64, id: i64) -> DbResult<Option<McpRecord>> {
+    c.query_row(
+        &format!("SELECT {MCP_COLS} FROM mcp_servers WHERE id = ?1 AND user_id = ?2"),
+        params![id, user_id],
+        mcp_from_row,
+    )
+    .optional()
+}
+
+pub fn mcp_records(c: &Connection, user_id: i64, ids: &[i64]) -> DbResult<Vec<McpRecord>> {
+    let mut out = Vec::new();
+    for id in ids {
+        if let Some(r) = get_mcp_record(c, user_id, *id)? {
+            out.push(r);
+        }
+    }
+    Ok(out)
+}
+
+/// Encrypted name/value pairs plus the list of names (shown in the UI).
+pub type SecretPairs = (Vec<u8>, Vec<String>);
+
+#[allow(clippy::too_many_arguments)]
+pub fn save_mcp_server(
+    c: &Connection,
+    user_id: i64,
+    id: Option<i64>,
+    name: &str,
+    transport: McpTransport,
+    url: &str,
+    command: &str,
+    args: &[String],
+    headers: Option<SecretPairs>,
+    env: Option<SecretPairs>,
+    enabled: bool,
+) -> DbResult<Option<i64>> {
+    let args = serde_json::to_string(args).unwrap_or_else(|_| "[]".into());
+    let id = match id {
+        Some(id) => {
+            let n = c.execute(
+                "UPDATE mcp_servers SET name = ?3, transport = ?4, url = ?5, command = ?6, args = ?7, enabled = ?8 WHERE id = ?1 AND user_id = ?2",
+                params![id, user_id, name, transport.as_str(), url, command, args, enabled],
+            )?;
+            if n == 0 {
+                return Ok(None);
+            }
+            id
+        }
+        None => {
+            c.execute(
+                "INSERT INTO mcp_servers (user_id, name, transport, url, command, args, enabled, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![user_id, name, transport.as_str(), url, command, args, enabled, now()],
+            )?;
+            c.last_insert_rowid()
+        }
+    };
+    if let Some((enc, names)) = headers {
+        c.execute(
+            "UPDATE mcp_servers SET headers_enc = ?2, header_names = ?3 WHERE id = ?1",
+            params![id, enc, serde_json::to_string(&names).unwrap_or_default()],
+        )?;
+    }
+    if let Some((enc, names)) = env {
+        c.execute(
+            "UPDATE mcp_servers SET env_enc = ?2, env_names = ?3 WHERE id = ?1",
+            params![id, enc, serde_json::to_string(&names).unwrap_or_default()],
+        )?;
+    }
+    Ok(Some(id))
+}
+
+pub fn delete_mcp_server(c: &Connection, user_id: i64, id: i64) -> DbResult<bool> {
+    Ok(c.execute("DELETE FROM mcp_servers WHERE id = ?1 AND user_id = ?2", params![id, user_id])? > 0)
 }
 
 /// Deletes a message and every later message in its conversation (used by "regenerate").
@@ -511,11 +893,11 @@ mod tests {
 
     #[test]
     fn conversation_flow_and_search() {
-        let (c, uid) = setup();
+        let (mut c, uid) = setup();
         let cid = create_conversation(&c, uid, "Cats & code").unwrap();
         insert_message(&c, cid, MsgRole::User, "How do I write a Rust iterator?", None, None).unwrap();
         let a = insert_message(&c, cid, MsgRole::Assistant, "", Some(1), Some("m")).unwrap();
-        finish_message(&c, a.id, "Implement the Iterator trait with fn next.", None).unwrap();
+        finish_message(&c, a.id, "Implement the Iterator trait with fn next.", None, &[]).unwrap();
 
         let conv = get_conversation(&c, uid, cid).unwrap().unwrap();
         assert_eq!(conv.messages.len(), 2);
@@ -532,7 +914,7 @@ mod tests {
         assert!(truncate_from(&c, uid, cid, a.id).unwrap());
         assert_eq!(get_conversation(&c, uid, cid).unwrap().unwrap().messages.len(), 1);
         assert!(search(&c, uid, "trait").unwrap().is_empty());
-        assert!(delete_conversation(&c, uid, cid).unwrap());
+        assert!(delete_conversation(&mut c, uid, cid).unwrap().is_some());
         assert!(get_conversation(&c, uid, cid).unwrap().is_none());
     }
 
