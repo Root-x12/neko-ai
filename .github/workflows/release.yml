@@ -1,11 +1,16 @@
 name: Release
 
-# Builds ready-to-run downloads. Push a tag like v0.1.0 to publish them as a GitHub release;
-# running it by hand just keeps the zips as workflow artifacts.
+# Builds ready-to-run downloads and publishes them as a GitHub release, either when a tag
+# like v0.1.0 is pushed or when run by hand with a version (the tag is then created).
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Release tag, e.g. v0.1.0"
+        required: true
+        default: "v0.1.0"
 
 permissions:
   contents: write
@@ -72,8 +77,31 @@ jobs:
         with:
           name: ${{ matrix.name }}
           path: pkg/${{ matrix.name }}.zip
-      - name: Publish
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+
+  # One job publishes everything, so parallel builds never race to create the release.
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
         with:
-          files: pkg/${{ matrix.name }}.zip
+          pattern: neko-ai-*
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.version || github.ref_name }}
+          target_commitish: ${{ github.sha }}
+          name: Neko AI ${{ inputs.version || github.ref_name }}
+          body: |
+            **Download the zip for your computer below**, unzip it, and double-click `neko-ai` (`neko-ai.exe` on Windows).
+            Your browser opens http://localhost:8080; create your account with the setup code shown in the window.
+            No API key is needed to look around. Add one later in Settings → Providers. See README.txt inside the zip.
+
+            | Computer | File |
+            |---|---|
+            | Windows | neko-ai-windows-x64.zip |
+            | Mac (M1/M2/M3/M4) | neko-ai-macos-apple-silicon.zip |
+            | Mac (Intel) | neko-ai-macos-intel.zip |
+            | Linux | neko-ai-linux-x64.zip |
+          files: dist/*.zip
