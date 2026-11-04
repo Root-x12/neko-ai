@@ -56,7 +56,8 @@ pub fn MascotDefs() -> impl IntoView {
     }
 }
 
-/// The cat. A shaded, softly 3D figure whose head turns and eyes follow the pointer (see
+/// The cat, drawn anime-style (line art, big sparkly eyes, cel shading) with soft 3D depth: its
+/// head turns and eyes follow the pointer (see
 /// `--look-x/y`). CSS restyles the same shapes into a chrome robot cat with a visor in Cyber mode.
 /// `state` is "idle", "thinking" or "sleep".
 #[component]
@@ -86,24 +87,32 @@ pub fn Mascot(#[prop(into)] state: Signal<&'static str>, #[prop(optional)] big: 
                         <path d="M50 24 q -4 6 -2 11 q 3 -5 2 -11 z" />
                         <path d="M70 24 q 4 6 2 11 q -3 -5 -2 -11 z" />
                     </g>
+                    <path class="cel" d="M20 62 Q 26 92 60 92 Q 94 92 100 62 Q 92 84 60 85 Q 28 84 20 62 Z" />
                     <ellipse class="gloss" cx="44" cy="35" rx="18" ry="9" />
-                    <ellipse class="blush" cx="30" cy="70" rx="7" ry="4" />
-                    <ellipse class="blush" cx="90" cy="70" rx="7" ry="4" />
+                    <ellipse class="blush" cx="28" cy="70" rx="8" ry="4.5" />
+                    <ellipse class="blush" cx="92" cy="70" rx="8" ry="4.5" />
+                    <g class="hatch">
+                        <path d="M22 72 l3 -5 M27 72 l3 -5 M32 72 l3 -5 M86 72 l3 -5 M91 72 l3 -5 M96 72 l3 -5" />
+                    </g>
                     <ellipse class="muzzle" cx="52" cy="72" rx="10" ry="7.5" />
                     <ellipse class="muzzle" cx="68" cy="72" rx="10" ry="7.5" />
                     <g class="eyes">
                         <g class="eye-wrap">
-                            <ellipse class="eye" cx="42" cy="55" rx="7.5" ry="9" />
+                            <ellipse class="eye" cx="41" cy="55" rx="9" ry="11" />
+                            <path class="lid" d="M32 50 Q 41 41 50 50" />
                             <g class="pupil">
-                                <circle class="shine" cx="44.6" cy="51.4" r="2.8" />
-                                <circle class="shine small" cx="39.6" cy="58.6" r="1.2" />
+                                <ellipse class="shine" cx="44.5" cy="50" rx="3.6" ry="4.4" />
+                                <circle class="shine small" cx="37.5" cy="60" r="1.6" />
+                                <path class="sparkle" d="M45 58 l0.8 2 2 0.8 -2 0.8 -0.8 2 -0.8 -2 -2 -0.8 2 -0.8 z" />
                             </g>
                         </g>
                         <g class="eye-wrap">
-                            <ellipse class="eye" cx="78" cy="55" rx="7.5" ry="9" />
+                            <ellipse class="eye" cx="79" cy="55" rx="9" ry="11" />
+                            <path class="lid" d="M70 50 Q 79 41 88 50" />
                             <g class="pupil">
-                                <circle class="shine" cx="80.6" cy="51.4" r="2.8" />
-                                <circle class="shine small" cx="75.6" cy="58.6" r="1.2" />
+                                <ellipse class="shine" cx="82.5" cy="50" rx="3.6" ry="4.4" />
+                                <circle class="shine small" cx="75.5" cy="60" r="1.6" />
+                                <path class="sparkle" d="M83 58 l0.8 2 2 0.8 -2 0.8 -0.8 2 -0.8 -2 -2 -0.8 2 -0.8 z" />
                             </g>
                         </g>
                         <path class="sleep-eye" d="M34 57 Q 42 62 50 57" />
@@ -122,33 +131,6 @@ pub fn Mascot(#[prop(into)] state: Signal<&'static str>, #[prop(optional)] big: 
                     <text x="106" y="10">"z"</text>
                 </g>
             </svg>
-        </div>
-    }
-}
-
-/// Decorative animated background: drifting petals/paws (Neko) or a neon grid (Cyber).
-#[component]
-pub fn Backdrop() -> impl IntoView {
-    // Deterministic pseudo-random layout so it looks organic without a RNG.
-    let petals = (0..14)
-        .map(|i| {
-            let left = (i * 37 + 11) % 100;
-            let delay = (i * 7) % 19;
-            let dur = 16 + (i * 5) % 14;
-            let size = 10 + (i * 3) % 12;
-            let style = format!("left:{left}%;animation-delay:-{delay}s;animation-duration:{dur}s;--s:{size}px");
-            let class = if i % 3 == 0 { "petal paw" } else { "petal" };
-            view! { <span class=class style=style></span> }
-        })
-        .collect_view();
-    view! {
-        <div class="backdrop" aria-hidden="true">
-            <div class="neko-bg">{petals}</div>
-            <div class="cyber-bg">
-                <div class="grid"></div>
-                <div class="glow"></div>
-                <div class="scanlines"></div>
-            </div>
         </div>
     }
 }

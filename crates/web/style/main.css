@@ -851,6 +851,15 @@ a.btn { text-decoration: none; color: var(--text); }
 .mascot[data-state="sleep"] .tail { animation: none; }
 .mascot[data-state="sleep"] .head-group { transform: none; }
 
+/* Anime touches: line art, lash lines, sparkles, cel shadow, blush hatching */
+.mascot .head, .mascot .ear-outer, .mascot .body { stroke: var(--fur-ink); stroke-width: 1.8; stroke-linejoin: round; }
+.mascot .paw { stroke: var(--fur-ink); stroke-width: 1.4; }
+.mascot .cel { fill: var(--fur-lo); opacity: .45; }
+.mascot .lid { fill: none; stroke: #1a1013; stroke-width: 2.2; stroke-linecap: round; }
+.mascot .sparkle { fill: #fff; opacity: .9; }
+.mascot .hatch path { fill: none; stroke: #ff6f8a; stroke-width: 1.4; stroke-linecap: round; opacity: .75; }
+[data-mode="cyber"] .mascot .cel, [data-mode="cyber"] .mascot .hatch, [data-mode="cyber"] .mascot .lid { display: none; }
+
 /* Cyber cat: polished chrome robot with a neon visor */
 [data-mode="cyber"] .mascot svg { filter: drop-shadow(0 0 5px color-mix(in srgb, var(--mascot-line) 55%, transparent)); }
 [data-mode="cyber"][data-scheme="light"] .mascot svg { filter: drop-shadow(0 2px 3px rgba(15, 23, 41, .25)); }
@@ -874,44 +883,168 @@ a.btn { text-decoration: none; color: var(--text); }
 [data-motion="off"] .mascot .head-group, [data-motion="off"] .mascot .pupil, [data-motion="off"] .mascot .gloss { transform: none; }
 
 /* ==========================================================================
-   Animated backdrop
+   Animated backdrop: anime lake (Neko) and neon lakeside (Cyber)
    ========================================================================== */
 
-.backdrop { position: fixed; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; }
-.neko-bg, .cyber-bg { position: absolute; inset: 0; transition: opacity .6s var(--ease); }
+.backdrop { position: fixed; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; background: var(--bg); }
+.neko-bg, .cyber-bg { position: absolute; inset: 0; transition: opacity .8s var(--ease); }
 [data-mode="neko"] .cyber-bg, [data-mode="cyber"] .neko-bg { opacity: 0; }
 [data-mode="neko"] .neko-bg *, [data-mode="cyber"] .cyber-bg * { animation-play-state: running; }
 [data-mode="cyber"] .neko-bg *, [data-mode="neko"] .cyber-bg * { animation-play-state: paused; }
+.scene-host, .scene { position: absolute; inset: 0; width: 100%; height: 100%; }
+/* A soft wash keeps the app readable over the scenery. */
+.veil { position: absolute; inset: 0; background: linear-gradient(to bottom, color-mix(in srgb, var(--bg) 18%, transparent), color-mix(in srgb, var(--bg) 8%, transparent) 40%, color-mix(in srgb, var(--bg) 30%, transparent)); }
 
-.petal {
-  position: absolute; top: -40px; width: var(--s); height: var(--s); opacity: .55;
-  background: var(--petal); border-radius: 80% 0 80% 0; animation: fall linear infinite;
+/* --- scene colours: day (light) and night (dark) --- */
+:root {
+  --sky-top: #8ec5ec; --sky-mid: #cfe7f6; --sky-bot: #fde4c8; --sun: #fff3cf;
+  --mtn: #7f95bb; --snow: #fbfdff; --hill-far: #a3bccf; --lake-top: #a7d0ea; --lake-bot: #6c9ec6;
+  --shore: #6f9b6c; --grass: #5f8f5d; --torii: #d4493a; --trunk: #6b4a35; --cloud: #ffffff; --cloud-o: .85;
+  --boat: #8a5a3b; --boat-rim: #5e3b26; --lantern: #ffcf6e; --star-o: 0; --fly-o: 0;
+  --leaf: #e2802e; --leaf-2: #f4b45a; --foliage: #d9692b; --foliage-2: #f0974a; --leaf-o: .9;
+  --cy-sky-top: #04050c; --cy-sky-mid: #0d1024; --cy-sky-bot: color-mix(in srgb, var(--accent) 22%, #0d1024);
+  --cy-lake-top: #070a18; --cy-lake-bot: #02030a; --cy-city: #060914; --cy-pier: #0b1020;
 }
-.petal.paw {
-  border-radius: 50%; opacity: .35;
-  background: radial-gradient(circle at 50% 65%, var(--petal) 34%, transparent 35%),
-              radial-gradient(circle at 20% 30%, var(--petal) 14%, transparent 15%),
-              radial-gradient(circle at 50% 18%, var(--petal) 14%, transparent 15%),
-              radial-gradient(circle at 80% 30%, var(--petal) 14%, transparent 15%);
+[data-scheme="dark"] {
+  --sky-top: #0b1030; --sky-mid: #1f2350; --sky-bot: #4b3d66; --sun: #f6f1da;
+  --mtn: #2b3358; --snow: #c7d0ec; --hill-far: #222948; --lake-top: #1c2850; --lake-bot: #0c112a;
+  --shore: #17221f; --grass: #22362c; --torii: #9e2f2a; --trunk: #2c211d; --cloud: #c8d0ff; --cloud-o: .14;
+  --boat: #4a3326; --boat-rim: #2a1d16; --lantern: #ffc45e; --star-o: 1; --fly-o: 1;
+  --foliage: #6b3020; --foliage-2: #8c4127; --leaf-o: .75;
 }
-.cyber-bg .grid {
-  position: absolute; left: -50%; right: -50%; bottom: -10%; height: 60%;
-  background-image: linear-gradient(var(--grid) 1px, transparent 1px), linear-gradient(90deg, var(--grid) 1px, transparent 1px);
-  background-size: 48px 48px; transform: perspective(420px) rotateX(62deg); transform-origin: 50% 100%;
-  mask-image: linear-gradient(to top, #000 10%, transparent 85%); -webkit-mask-image: linear-gradient(to top, #000 10%, transparent 85%);
-  animation: grid-move 3s linear infinite;
+[data-variant="sakura"] { --leaf: #ffb3cc; --leaf-2: #ffd6e4; --foliage: #f59ab8; --foliage-2: #ffc2d6; }
+[data-variant="sakura"][data-scheme="dark"] { --foliage: #7a3d5a; --foliage-2: #9a4f72; }
+[data-variant="matcha"] { --leaf: #8cc56a; --leaf-2: #c3e29a; --foliage: #6ea84f; --foliage-2: #9bcf73; }
+[data-variant="matcha"][data-scheme="dark"] { --foliage: #2e4a2a; --foliage-2: #3f6338; }
+[data-variant="mochi"] { --leaf: #f6a06a; --leaf-2: #ffd0a8; }
+[data-variant="lavender"] { --leaf: #b9a4f5; --leaf-2: #dcd0ff; --foliage: #9d86e8; --foliage-2: #c0b0f6; }
+[data-variant="lavender"][data-scheme="dark"] { --foliage: #3b3166; --foliage-2: #4f4387; }
+[data-mode="cyber"][data-scheme="light"] {
+  --cy-sky-top: #c9d3e6; --cy-sky-mid: #e2e8f2; --cy-sky-bot: color-mix(in srgb, var(--accent) 18%, #eef2f8);
+  --cy-lake-top: #cdd6e6; --cy-lake-bot: #b7c3d8; --cy-city: #7d8aa3; --cy-pier: #8794ad;
 }
-.cyber-bg .glow {
-  position: absolute; inset: -20%;
-  background: radial-gradient(40% 35% at 15% 10%, var(--glow-a, transparent), transparent 70%),
-              radial-gradient(40% 35% at 90% 80%, var(--glow-b, transparent), transparent 70%);
-  animation: drift 18s ease-in-out infinite alternate;
-}
+
+/* --- Neko: lake below Mt. Fuji --- */
+.neko-scene .stars, .neko-scene .fireflies { opacity: var(--star-o); }
+.neko-scene .star { fill: #fff; animation: twinkle 4s ease-in-out infinite; }
+.neko-scene .sun { fill: var(--sun); }
+.neko-scene .sun-glow { opacity: .8; }
+.neko-scene .cloud ellipse { fill: var(--cloud); opacity: var(--cloud-o); }
+.neko-scene .c1 { animation: cloud-drift 140s linear infinite; }
+.neko-scene .c2 { animation: cloud-drift 190s linear infinite; animation-delay: -60s; }
+.neko-scene .c3 { animation: cloud-drift 160s linear infinite; animation-delay: -110s; }
+.neko-scene .mtn { fill: var(--mtn); }
+.neko-scene .snow { fill: var(--snow); }
+.neko-scene .hill-far { fill: var(--hill-far); }
+.neko-scene .reflection { opacity: .22; }
+.neko-scene .shimmer { fill: #fff; opacity: 0; animation: shimmer 5s ease-in-out infinite; }
+.neko-scene .shore { fill: var(--shore); }
+.neko-scene .torii rect, .neko-scene .torii path { fill: var(--torii); }
+.neko-scene .blade { fill: none; stroke: var(--grass); stroke-width: 3; stroke-linecap: round; transform-box: fill-box; transform-origin: 50% 100%; animation: sway 4s ease-in-out infinite; }
+.neko-scene .trunk { fill: none; stroke: var(--trunk); stroke-width: 16; stroke-linecap: round; }
+.neko-scene .foliage circle { fill: var(--foliage); }
+.neko-scene .foliage-hi circle { fill: var(--foliage-2); opacity: .8; }
+.neko-scene .tree { transform-box: fill-box; transform-origin: 70% 100%; animation: tree-sway 7s ease-in-out infinite; }
+.neko-scene .fireflies { opacity: var(--fly-o); }
+.neko-scene .firefly { fill: #fff6a8; animation: firefly 7s ease-in-out infinite; }
+
+.boat-wrap { animation: boat-drift 120s ease-in-out infinite alternate; }
+.neko-scene .boat-wrap { transform: translate(560px, 650px); }
+.boat { animation: bob 5s ease-in-out infinite; }
+.neko-scene .hull { fill: var(--boat); }
+.neko-scene .hull-rim { stroke: var(--boat-rim); stroke-width: 3; }
+.neko-scene .mast { stroke: var(--boat-rim); stroke-width: 2.5; }
+.neko-scene .lantern { fill: var(--lantern); filter: drop-shadow(0 0 6px var(--lantern)); }
+.neko-scene .ripple { fill: none; stroke: #fff; stroke-width: 1.5; opacity: .35; transform-box: fill-box; transform-origin: center; animation: ripple 5s ease-in-out infinite; }
+.boat-cat .bc-fur { fill: var(--fur); stroke: var(--fur-ink); stroke-width: 1.2; }
+.boat-cat .bc-ear { fill: var(--ear-in); }
+.boat-cat .bc-tail { fill: none; stroke: var(--fur); stroke-width: 4; stroke-linecap: round; transform-box: fill-box; transform-origin: 0 100%; animation: wag 3.5s ease-in-out infinite; }
+
+/* --- Cyber: neon lakeside at night --- */
+.cyber-scene .star { fill: #fff; opacity: .6; animation: twinkle 5s ease-in-out infinite; }
+[data-scheme="light"] .cyber-scene .star { opacity: 0; }
+.cyber-scene .c-sun { opacity: .7; }
+.cyber-scene .city rect { fill: var(--cy-city); }
+.cyber-scene .antenna { fill: var(--cy-city); }
+.cyber-scene .beacon { fill: var(--danger); animation: beacon 2.4s steps(1) infinite; }
+.cyber-scene .windows { opacity: .55; }
+.cyber-scene .win { fill: var(--accent); }
+.cyber-scene .win.alt { fill: var(--accent-2); }
+.cyber-scene .win.twinkle { animation: twinkle 3s ease-in-out infinite; }
+.cyber-scene .c-reflection { opacity: .28; }
+.cyber-scene .horizon { fill: var(--accent); opacity: .5; }
+.cyber-scene .scan { fill: var(--accent); opacity: 0; animation: shimmer 6s ease-in-out infinite; }
+.cyber-scene .boat-wrap { transform: translate(900px, 660px); animation-duration: 150s; }
+.cyber-scene .hull { fill: var(--cy-pier); stroke: var(--accent); stroke-width: 2; filter: drop-shadow(0 0 6px var(--accent)); }
+.cyber-scene .mast { stroke: var(--accent); stroke-width: 2; }
+.cyber-scene .lamp { fill: var(--accent-2); filter: drop-shadow(0 0 8px var(--accent-2)); animation: twinkle 3s ease-in-out infinite; }
+.cyber-scene .ripple { fill: none; stroke: var(--accent); stroke-width: 1.2; opacity: .5; transform-box: fill-box; transform-origin: center; animation: ripple 5s ease-in-out infinite; }
+.cyber-scene .pier, .cyber-scene .posts rect, .cyber-scene .shore-r { fill: var(--cy-pier); }
+.cyber-scene .pier-edge { stroke: var(--accent); stroke-width: 2; filter: drop-shadow(0 0 4px var(--accent)); }
+.walker { transform: translate(380px, 700px); animation: walk-path 46s linear infinite; }
+.walker-flip { animation: walk-flip 46s steps(1) infinite; }
+.walk-cat { animation: bob .6s ease-in-out infinite; }
+.walk-cat .wc-body, .walk-cat .wc-head, .walk-cat .wc-ear { fill: var(--cy-pier); stroke: var(--accent); stroke-width: 1.8; stroke-linejoin: round; }
+.walk-cat .wc-visor { fill: var(--accent-2); }
+.walk-cat .wc-tail, .walk-cat .leg { fill: none; stroke: var(--accent); stroke-width: 2.4; stroke-linecap: round; }
+.walk-cat .leg { transform-box: fill-box; transform-origin: 50% 0; }
+.walk-cat .l1 { animation: step .6s ease-in-out infinite; }
+.walk-cat .l2 { animation: step .6s ease-in-out infinite reverse; }
+.walk-cat { filter: drop-shadow(0 0 5px var(--accent)); }
 .cyber-bg .scanlines {
-  position: absolute; inset: 0; opacity: .5;
-  background: repeating-linear-gradient(to bottom, transparent 0 2px, rgba(0, 0, 0, .12) 2px 3px);
+  position: absolute; inset: 0; opacity: .35;
+  background: repeating-linear-gradient(to bottom, transparent 0 2px, rgba(0, 0, 0, .14) 2px 3px);
 }
-[data-scheme="light"] .cyber-bg .scanlines { opacity: .12; }
+[data-scheme="light"] .cyber-bg .scanlines { opacity: .08; }
+
+/* --- wind: leaves (Neko) and glowing sparks (Cyber) --- */
+.winds { position: absolute; inset: 0; }
+.wind { position: absolute; left: 0; width: var(--s); height: var(--s); animation: wind linear infinite; will-change: transform; }
+.wind i { display: block; width: 100%; height: 100%; animation: flutter var(--f) ease-in-out infinite alternate; }
+.leaf {
+  opacity: var(--leaf-o);
+  background: linear-gradient(135deg, var(--leaf-2), var(--leaf));
+  border-radius: 0 80% 0 80%;
+  box-shadow: inset -1px -1px 0 rgba(0, 0, 0, .12);
+}
+.leaf.alt { border-radius: 50% 0 50% 0; background: linear-gradient(135deg, var(--leaf), var(--leaf-2)); }
+.spark {
+  width: 40% !important; height: 40% !important; margin: 30%;
+  background: var(--accent); transform: rotate(45deg); border-radius: 2px;
+  box-shadow: 0 0 8px var(--accent), 0 0 2px #fff; opacity: .8;
+}
+.spark.alt { background: var(--accent-2); box-shadow: 0 0 8px var(--accent-2); }
+
+/* Messages sit on a frosted panel so text stays readable over the scenery. */
+.msg-list {
+  margin-top: 16px; margin-bottom: 16px; border-radius: 26px;
+  background: color-mix(in srgb, var(--bg) 78%, transparent);
+  backdrop-filter: blur(10px) saturate(1.1); -webkit-backdrop-filter: blur(10px) saturate(1.1);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--border) 60%, transparent);
+}
+.empty-title, .empty > p { text-shadow: 0 1px 12px color-mix(in srgb, var(--bg) 90%, transparent); }
+.empty > p { background: color-mix(in srgb, var(--bg) 60%, transparent); padding: 4px 12px; border-radius: 999px; }
+
+@keyframes twinkle { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
+@keyframes cloud-drift { from { transform: translateX(-500px); } to { transform: translateX(1800px); } }
+@keyframes shimmer { 0%, 100% { opacity: 0; transform: translateX(0); } 50% { opacity: .5; transform: translateX(14px); } }
+@keyframes sway { 0%, 100% { transform: rotate(-4deg); } 50% { transform: rotate(6deg); } }
+@keyframes tree-sway { 0%, 100% { transform: rotate(0); } 50% { transform: rotate(1.2deg); } }
+@keyframes firefly { 0%, 100% { transform: translate(0, 0); opacity: 0; } 30% { opacity: .9; } 50% { transform: translate(18px, -14px); opacity: .3; } 70% { opacity: 1; } }
+@keyframes boat-drift { from { translate: -260px 0; } to { translate: 300px 0; } }
+@keyframes ripple { 0%, 100% { transform: scale(.9); opacity: .2; } 50% { transform: scale(1.08); opacity: .45; } }
+@keyframes beacon { 0%, 60% { opacity: 1; } 61%, 100% { opacity: .15; } }
+@keyframes walk-path { 0% { translate: 0 0; } 48% { translate: 400px 0; } 52% { translate: 400px 0; } 98% { translate: 0 0; } 100% { translate: 0 0; } }
+@keyframes walk-flip { 0% { transform: scaleX(1); } 50% { transform: scaleX(-1); } }
+@keyframes step { 0%, 100% { transform: rotate(-18deg); } 50% { transform: rotate(18deg); } }
+@keyframes wind {
+  0% { transform: translate(-6vw, 0) rotate(0deg); }
+  20% { transform: translate(18vw, 7vh) rotate(110deg); }
+  45% { transform: translate(46vw, 2vh) rotate(250deg); }
+  70% { transform: translate(74vw, 12vh) rotate(380deg); }
+  100% { transform: translate(108vw, 6vh) rotate(540deg); }
+}
+@keyframes flutter { from { transform: rotateX(0) scaleX(1); } to { transform: rotateX(55deg) scaleX(.7); } }
 
 /* ==========================================================================
    Animations
