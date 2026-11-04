@@ -107,6 +107,7 @@ async fn start_app_with(tweak: impl FnOnce(&mut Config)) -> (Client, String, App
         local_only: false,
         trust_proxy: false,
         audit_retention_days: Some(365),
+        bundled: false,
     };
     let mut config = config;
     tweak(&mut config);

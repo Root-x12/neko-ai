@@ -2,8 +2,25 @@ use anyhow::Context;
 use neko_server::{crypto, db, devices, AppState, Config};
 use tracing_subscriber::EnvFilter;
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() {
+    let result = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(anyhow::Error::from)
+        .and_then(|rt| rt.block_on(run()));
+    if let Err(e) = result {
+        eprintln!("\n  Neko AI could not start: {e:#}\n");
+        // A double-clicked program's window would close before the message can be read.
+        use std::io::IsTerminal;
+        if std::io::stdin().is_terminal() {
+            eprintln!("  Press Enter to close.");
+            let _ = std::io::stdin().read_line(&mut String::new());
+        }
+        std::process::exit(1);
+    }
+}
+
+async fn run() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
         .init();
@@ -26,6 +43,9 @@ async fn main() -> anyhow::Result<()> {
     let listener =
         tokio::net::TcpListener::bind(config.bind).await.with_context(|| format!("binding {}", config.bind))?;
     print_banner(&config, setup_code.as_deref());
+    if config.bundled {
+        open_browser(&format!("http://localhost:{}", config.bind.port()));
+    }
 
     let state = AppState::new(config, db, vault, setup_code);
     // Hourly cleanup of uploads that were never sent.
@@ -60,6 +80,7 @@ fn print_banner(config: &Config, setup_code: Option<&str>) {
     if let Some(code) = setup_code {
         println!();
         println!("  First run: create your admin account with setup code  {code}");
+        println!("  No API key yet? That's fine: look around, then add one in Settings → Providers.");
     }
     if let Some(qr) = urls.first().filter(|u| !u.contains("localhost")).and_then(|u| devices::qr_terminal(u)) {
         println!();
@@ -68,7 +89,27 @@ fn print_banner(config: &Config, setup_code: Option<&str>) {
             println!("  {line}");
         }
     }
+    println!("  Keep this window open while you use Neko AI (close it to stop).");
     println!();
+}
+
+/// Best effort: if it fails, the address is in the banner anyway.
+fn open_browser(url: &str) {
+    use std::process::{Command, Stdio};
+    let mut cmd = if cfg!(target_os = "windows") {
+        let mut c = Command::new("cmd");
+        c.args(["/C", "start", "", url]);
+        c
+    } else if cfg!(target_os = "macos") {
+        let mut c = Command::new("open");
+        c.arg(url);
+        c
+    } else {
+        let mut c = Command::new("xdg-open");
+        c.arg(url);
+        c
+    };
+    let _ = cmd.stdout(Stdio::null()).stderr(Stdio::null()).spawn();
 }
 
 async fn shutdown_signal() {
