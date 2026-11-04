@@ -9,7 +9,7 @@ use std::{
 use neko_shared::{
     AdminUser, Attachment, AttachmentKind, AuditEntry, ChatParams, Conversation, ConversationSummary, DeviceSession,
     Document, GuardPolicy, KnowledgeHit, McpServer, McpTransport, Memory, MemorySettings, Message, MsgRole, Provider,
-    ProviderKind, Role, SearchBackend, SearchHit, SearchSettings, ToolCall, UpdateUser, User, Workspace,
+    ProviderKind, Role, SearchBackend, SearchHit, SearchSettings, ToolCall, UpdateUser, User, Wallpaper, Workspace,
     WorkspaceInput,
 };
 use rusqlite::{params, Connection, OptionalExtension, Row};
@@ -196,6 +196,16 @@ END;
 CREATE TRIGGER doc_chunks_ad AFTER DELETE ON doc_chunks BEGIN
     INSERT INTO doc_chunks_fts(doc_chunks_fts, rowid, content) VALUES ('delete', old.id, old.content);
 END;
+"#,
+    r#"
+CREATE TABLE wallpapers (
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    slot       TEXT NOT NULL,
+    path       TEXT NOT NULL,
+    mime       TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, slot)
+);
 "#,
 ];
 
@@ -730,7 +740,8 @@ pub fn sweep_orphan_attachments(c: &Connection, cutoff: i64) -> DbResult<Vec<Str
 
 /// Every file the database points to (chat attachments and knowledge documents).
 pub fn all_attachment_paths(c: &Connection) -> DbResult<std::collections::HashSet<String>> {
-    let mut st = c.prepare("SELECT path FROM attachments UNION SELECT path FROM documents")?;
+    let mut st =
+        c.prepare("SELECT path FROM attachments UNION SELECT path FROM documents UNION SELECT path FROM wallpapers")?;
     let rows = st.query_map([], |r| r.get(0))?;
     rows.collect()
 }
@@ -1086,7 +1097,7 @@ pub fn delete_user(c: &mut Connection, id: i64) -> DbResult<Option<Vec<String>>>
     let tx = c.transaction()?;
     let paths: Vec<String> = {
         let mut st = tx.prepare(
-            "SELECT path FROM attachments WHERE user_id = ?1 UNION SELECT path FROM documents WHERE user_id = ?1",
+            "SELECT path FROM attachments WHERE user_id = ?1 UNION SELECT path FROM documents WHERE user_id = ?1 UNION SELECT path FROM wallpapers WHERE user_id = ?1",
         )?;
         let rows = st.query_map([id], |r| r.get(0))?;
         rows.collect::<DbResult<_>>()?
@@ -1258,6 +1269,39 @@ pub fn delete_memory(c: &Connection, user_id: i64, id: i64) -> DbResult<bool> {
 
 pub fn clear_memories(c: &Connection, user_id: i64) -> DbResult<usize> {
     c.execute("DELETE FROM memories WHERE user_id = ?1", [user_id])
+}
+
+// ---------- wallpapers ----------
+
+pub fn list_wallpapers(c: &Connection, user_id: i64) -> DbResult<Vec<Wallpaper>> {
+    let mut st = c.prepare("SELECT slot, updated_at FROM wallpapers WHERE user_id = ?1 ORDER BY slot")?;
+    let rows = st.query_map([user_id], |r| Ok(Wallpaper { slot: r.get(0)?, updated_at: r.get(1)? }))?;
+    rows.collect()
+}
+
+/// (path, mime) of a wallpaper.
+pub fn get_wallpaper(c: &Connection, user_id: i64, slot: &str) -> DbResult<Option<(String, String)>> {
+    c.query_row("SELECT path, mime FROM wallpapers WHERE user_id = ?1 AND slot = ?2", params![user_id, slot], |r| {
+        Ok((r.get(0)?, r.get(1)?))
+    })
+    .optional()
+}
+
+/// Sets a wallpaper; returns the file it replaced, if any.
+pub fn set_wallpaper(c: &Connection, user_id: i64, slot: &str, path: &str, mime: &str) -> DbResult<Option<String>> {
+    let old = get_wallpaper(c, user_id, slot)?.map(|(p, _)| p);
+    c.execute(
+        "INSERT INTO wallpapers (user_id, slot, path, mime, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(user_id, slot) DO UPDATE SET path = excluded.path, mime = excluded.mime, updated_at = excluded.updated_at",
+        params![user_id, slot, path, mime, now()],
+    )?;
+    Ok(old)
+}
+
+pub fn delete_wallpaper(c: &Connection, user_id: i64, slot: &str) -> DbResult<Option<String>> {
+    let old = get_wallpaper(c, user_id, slot)?.map(|(p, _)| p);
+    c.execute("DELETE FROM wallpapers WHERE user_id = ?1 AND slot = ?2", params![user_id, slot])?;
+    Ok(old)
 }
 
 // ---------- knowledge library ----------

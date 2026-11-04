@@ -972,3 +972,31 @@ async fn memory_knowledge_and_export() {
     let (_, hits) = c.json::<Vec<KnowledgeHit>>(M::GET, "/knowledge/search?q=cats", json!(null)).await;
     assert!(hits.unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn theme_wallpapers() {
+    use reqwest::Method as M;
+    let (mut c, code, _) = start_app_with(|_| {}).await;
+    assert_eq!(register(&mut c, "neko", Some(&code)).await, 200);
+    let png: Vec<u8> = [&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a][..], &[7u8; 64]].concat();
+    let form = || {
+        reqwest::multipart::Form::new().part("file", reqwest::multipart::Part::bytes(png.clone()).file_name("bg.png"))
+    };
+    let resp = c.req(M::PUT, "/wallpapers/sakura").multipart(form()).send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let (_, list) = c.json::<Vec<Wallpaper>>(M::GET, "/wallpapers", json!(null)).await;
+    assert_eq!(list.unwrap()[0].slot, "sakura");
+    let got = c.req(M::GET, "/wallpapers/sakura").send().await.unwrap();
+    assert_eq!(got.headers()["content-type"], "image/png");
+    assert_eq!(got.bytes().await.unwrap().to_vec(), png);
+    // Replacing keeps one entry; bad slot names and non-images are refused.
+    assert_eq!(c.req(M::PUT, "/wallpapers/sakura").multipart(form()).send().await.unwrap().status(), 200);
+    let (_, list) = c.json::<Vec<Wallpaper>>(M::GET, "/wallpapers", json!(null)).await;
+    assert_eq!(list.unwrap().len(), 1);
+    assert_eq!(c.req(M::PUT, "/wallpapers/..%2Fetc").multipart(form()).send().await.unwrap().status(), 400);
+    let txt = reqwest::multipart::Form::new()
+        .part("file", reqwest::multipart::Part::bytes(b"hello".to_vec()).file_name("x.txt"));
+    assert_eq!(c.req(M::PUT, "/wallpapers/matcha").multipart(txt).send().await.unwrap().status(), 400);
+    assert_eq!(c.req(M::DELETE, "/wallpapers/sakura").send().await.unwrap().status(), 204);
+    assert_eq!(c.req(M::GET, "/wallpapers/sakura").send().await.unwrap().status(), 404);
+}

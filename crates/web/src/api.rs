@@ -144,7 +144,11 @@ pub async fn upload(file: &web_sys::File) -> ApiResult<neko_shared::Attachment> 
 }
 
 pub async fn upload_to<T: DeserializeOwned>(path: &str, file: &web_sys::File) -> ApiResult<T> {
+    upload_with("POST", path, file).await
+}
+
+pub async fn upload_with<T: DeserializeOwned>(method: &str, path: &str, file: &web_sys::File) -> ApiResult<T> {
     let form = web_sys::FormData::new().map_err(ApiError::network)?;
     form.append_with_blob_and_filename("file", file, &file.name()).map_err(ApiError::network)?;
-    parse(fetch("POST", path, Body::Form(form), None).await?).await
+    parse(fetch(method, path, Body::Form(form), None).await?).await
 }

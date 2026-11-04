@@ -9,6 +9,7 @@ pub mod params;
 pub mod scene;
 pub mod settings;
 pub mod sidebar;
+pub mod worlds;
 
 use leptos::prelude::*;
 

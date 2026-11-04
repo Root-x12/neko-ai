@@ -82,6 +82,8 @@ pub struct Theme {
     pub scheme: RwSignal<Scheme>,
     pub motion: RwSignal<bool>,
     system_dark: RwSignal<bool>,
+    /// The user's own background pictures, by palette id.
+    pub wallpapers: RwSignal<Vec<neko_shared::Wallpaper>>,
 }
 
 const STORAGE_KEY: &str = "neko.theme";
@@ -132,6 +134,7 @@ impl Theme {
                 _ => !reduce_motion,
             }),
             system_dark: RwSignal::new(mq.as_ref().is_some_and(|m| m.matches())),
+            wallpapers: RwSignal::new(Vec::new()),
         };
 
         if let Some(mq) = mq {

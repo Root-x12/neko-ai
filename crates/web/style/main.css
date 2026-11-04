@@ -991,11 +991,6 @@ a.btn { text-decoration: none; color: var(--text); }
 .walk-cat .l1 { animation: step .6s ease-in-out infinite; }
 .walk-cat .l2 { animation: step .6s ease-in-out infinite reverse; }
 .walk-cat { filter: drop-shadow(0 0 5px var(--accent)); }
-.cyber-bg .scanlines {
-  position: absolute; inset: 0; opacity: .35;
-  background: repeating-linear-gradient(to bottom, transparent 0 2px, rgba(0, 0, 0, .14) 2px 3px);
-}
-[data-scheme="light"] .cyber-bg .scanlines { opacity: .08; }
 
 /* --- wind: leaves (Neko) and glowing sparks (Cyber) --- */
 .winds { position: absolute; inset: 0; }
@@ -1023,6 +1018,7 @@ a.btn { text-decoration: none; color: var(--text); }
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--border) 60%, transparent);
 }
 .empty-title, .empty > p { text-shadow: 0 1px 12px color-mix(in srgb, var(--bg) 90%, transparent); }
+[data-mode="cyber"] .empty-title { text-shadow: 0 0 3px var(--bg), 0 2px 16px var(--bg), var(--glow); }
 .empty > p { background: color-mix(in srgb, var(--bg) 60%, transparent); padding: 4px 12px; border-radius: 999px; }
 
 @keyframes twinkle { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
@@ -1045,6 +1041,243 @@ a.btn { text-decoration: none; color: var(--text); }
   100% { transform: translate(108vw, 6vh) rotate(540deg); }
 }
 @keyframes flutter { from { transform: rotateX(0) scaleX(1); } to { transform: rotateX(55deg) scaleX(.7); } }
+
+/* ==========================================================================
+   Worlds: one anime scene per palette (components/worlds.rs)
+   ========================================================================== */
+
+/* depth: layers shift with the pointer (uses `translate` so animations keep `transform`) */
+.w-layer { transition: translate .4s var(--ease); }
+.w-layer.far { translate: calc(var(--look-x, 0) * -6px) calc(var(--look-y, 0) * -3px); }
+.w-layer.mid { translate: calc(var(--look-x, 0) * -14px) calc(var(--look-y, 0) * -6px); }
+.w-layer.near { translate: calc(var(--look-x, 0) * -28px) calc(var(--look-y, 0) * -10px); }
+
+.w-stars { opacity: var(--w-star-o, 0); }
+.w-stars circle { fill: #fff; animation: twinkle 4s ease-in-out infinite; }
+.w-cloud circle, .w-cloud rect { fill: var(--w-cloud); }
+.w-cloud .hi { fill: var(--w-cloud-hi); }
+.drift-a { animation: cloud-slide 150s ease-in-out infinite alternate; }
+.drift-b { animation: cloud-slide 110s ease-in-out infinite alternate-reverse; }
+.drift-c { animation: cloud-slide 80s ease-in-out infinite alternate; }
+.w-flock-path { animation: flock 60s linear infinite; }
+.w-bird { fill: none; stroke: var(--w-bird); stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; transform-box: fill-box; transform-origin: center; animation: flap .45s ease-in-out infinite alternate; }
+.w-rays path { opacity: .55; animation: rays 9s ease-in-out infinite; }
+.w-sun { fill: var(--w-sun); }
+.w-glow { opacity: .9; }
+.w-cat-body { fill: var(--w-cat); }
+.w-cat-rim { fill: none; stroke: var(--w-cat-rim); stroke-width: 2; stroke-linecap: round; opacity: .7; }
+.w-cat-tail { fill: none; stroke: var(--w-cat); stroke-width: 7; stroke-linecap: round; transform-box: fill-box; transform-origin: 0 100%; animation: wag 4s ease-in-out infinite; }
+.w-scarf { fill: #d8343a; }
+.w-scarf-tail { transform-box: fill-box; transform-origin: 0 50%; animation: scarf 1.4s ease-in-out infinite alternate; }
+.w-torii rect, .w-torii path { fill: var(--w-torii); }
+.w-torii .w-torii-dark { fill: var(--w-torii-dark); }
+.w-toro rect, .w-toro path, .w-toro circle { fill: var(--w-stone); }
+.w-toro .w-light { fill: var(--w-lamp); filter: drop-shadow(0 0 10px var(--w-lamp)); animation: lamp 4s ease-in-out infinite; }
+.w-fireflies { opacity: var(--w-fly-o, 0); }
+.w-fireflies circle { fill: #fff6a8; filter: drop-shadow(0 0 4px #fff6a8); animation: firefly 7s ease-in-out infinite; }
+.w-trunk { fill: none; stroke: var(--w-trunk); stroke-width: 18; stroke-linecap: round; }
+.w-tree { transform-box: fill-box; transform-origin: 50% 100%; animation: tree-sway 6s ease-in-out infinite; }
+
+/* --- Sakura: shrine above the clouds --- */
+.w-sakura {
+  --w-sky1: #1d63c9; --w-sky2: #58b2ef; --w-sky3: #d8f1ff; --w-sun: #fffbe8; --w-cloud: #f4f9ff; --w-cloud-hi: #ffffff;
+  --w-bird: #1c2a4c; --w-cat: #1c2543; --w-cat-rim: #9fd6ff; --w-torii: #e0513b; --w-torii-dark: #9a3122;
+  --w-stone: #59657f; --w-lamp: #ffd27a; --w-trunk: #5b3a33;
+}
+[data-scheme="dark"] .w-sakura {
+  --w-sky1: #050a24; --w-sky2: #17285c; --w-sky3: #4d4a8c; --w-sun: #f3f1ff; --w-cloud: #36457c; --w-cloud-hi: #55649e;
+  --w-bird: #9aa6d8; --w-cat: #0b1026; --w-cat-rim: #8fb4ff; --w-torii: #b23a2c; --w-torii-dark: #6e2219;
+  --w-star-o: 1; --w-fly-o: 1;
+}
+.w-sakura .w-rays path { fill: url(#sk-ray); }
+[data-scheme="dark"] .w-sakura .w-rays { opacity: .25; }
+.w-sakura .w-peak { fill: #7598cc; }
+.w-sakura .w-rock { fill: #384667; }
+.w-sakura .w-moss { fill: #4e7c5c; }
+.w-sakura .w-wall { fill: #2c3a60; }
+.w-sakura .w-window { fill: #ffc86a; filter: drop-shadow(0 0 6px #ffb347); }
+.w-sakura .w-roof { fill: #22356a; }
+.w-sakura .w-roof-edge { fill: none; stroke: #e8803e; stroke-width: 3; }
+.w-sakura .w-cliff { fill: #34405f; }
+.w-sakura .w-cliff-hi { fill: #c98b5c; }
+.w-sakura .w-path { fill: #e0a774; }
+.w-sakura .w-bloom { fill: #ffb2cb; }
+.w-sakura .w-bloom.hi { fill: #ffd8e5; }
+[data-scheme="dark"] .w-sakura .w-peak { fill: #222d55; }
+[data-scheme="dark"] .w-sakura .w-rock, [data-scheme="dark"] .w-sakura .w-cliff { fill: #141a31; }
+[data-scheme="dark"] .w-sakura .w-moss { fill: #1f3a33; }
+[data-scheme="dark"] .w-sakura .w-wall, [data-scheme="dark"] .w-sakura .w-roof { fill: #121b38; }
+[data-scheme="dark"] .w-sakura .w-cliff-hi, [data-scheme="dark"] .w-sakura .w-path { fill: #3b3555; }
+[data-scheme="dark"] .w-sakura .w-bloom { fill: #a8577c; }
+[data-scheme="dark"] .w-sakura .w-bloom.hi { fill: #c77598; }
+
+/* --- Matcha: bamboo forest --- */
+.w-matcha {
+  --w-sky1: #e6f3d8; --w-sky2: #c4e2b2; --w-sky3: #eef7e2; --w-cat: #2b3d2b; --w-cat-rim: #d9f0b0;
+  --w-stone: #7c8a7a; --w-lamp: #ffd27a; --w-bam-far: #b5d7a1; --w-bam-mid: #77ad60; --w-bam-near: #3c6c34;
+}
+[data-scheme="dark"] .w-matcha {
+  --w-sky1: #08160f; --w-sky2: #10281b; --w-sky3: #183626; --w-cat: #050d08; --w-cat-rim: #8fd49a;
+  --w-stone: #2a352c; --w-lamp: #ffc45a; --w-bam-far: #1c3826; --w-bam-mid: #26492f; --w-bam-near: #305a37; --w-fly-o: 1;
+}
+.w-matcha .w-rays path { fill: url(#mt-ray); }
+[data-scheme="dark"] .w-matcha .w-rays { opacity: .15; }
+.w-bamboo.far path, .w-bamboo.far .w-bleaf { fill: var(--w-bam-far); }
+.w-bamboo.mid path, .w-bamboo.mid .w-bleaf { fill: var(--w-bam-mid); }
+.w-bamboo.near path, .w-bamboo.near .w-bleaf { fill: var(--w-bam-near); }
+.w-bamboo .w-node { fill: rgba(0, 0, 0, .18); }
+.w-stalk { transform-box: fill-box; transform-origin: 50% 100%; animation: bamboo 7s ease-in-out infinite; }
+.w-bamboo.near .w-stalk { animation-duration: 9s; }
+.w-mist ellipse { fill: #fff; opacity: .35; }
+[data-scheme="dark"] .w-mist ellipse { opacity: .08; }
+.w-matcha .w-ground { fill: #6d9a55; }
+[data-scheme="dark"] .w-matcha .w-ground { fill: #0f1f14; }
+.w-stone { fill: #a9b4a4; }
+[data-scheme="dark"] .w-stone { fill: #243026; }
+
+/* --- Mochi: sunset town --- */
+.w-mochi {
+  --w-sky1: #5b3d91; --w-sky2: #ff8b6c; --w-sky3: #ffd38c; --w-sun: #fff2c4; --w-bird: #3a2440; --w-cat: #2a1a2c; --w-cat-rim: #ffb38a;
+  --w-town-far: #c56f78; --w-town-mid: #7d3d60; --w-town-near: #3c2442; --w-lit-o: .35;
+}
+[data-scheme="dark"] .w-mochi {
+  --w-sky1: #0b0d2c; --w-sky2: #262355; --w-sky3: #5c3a66; --w-sun: #f6efd9; --w-bird: #b9b2e0; --w-cat: #07060f; --w-cat-rim: #ffb38a;
+  --w-town-far: #2a2550; --w-town-mid: #1a1838; --w-town-near: #0d0c1f; --w-lit-o: 1; --w-star-o: 1;
+}
+.w-streak { fill: #ffe1d0; opacity: .55; }
+[data-scheme="dark"] .w-streak { fill: #6a5a9a; opacity: .35; }
+.w-town.far rect, .w-town.far path { fill: var(--w-town-far); }
+.w-town.mid rect, .w-town.mid path { fill: var(--w-town-mid); }
+.w-town.near rect, .w-town.near path { fill: var(--w-town-near); }
+.w-town .w-lit { fill: #ffd27a !important; opacity: var(--w-lit-o); filter: drop-shadow(0 0 4px #ffb347); }
+.w-pole { fill: none; stroke: #2a1a28; stroke-width: 7; stroke-linecap: round; }
+.w-mochi .w-wire { fill: none; stroke: #2a1a28; stroke-width: 1.6; }
+.w-bird-sit { fill: #2a1a28; }
+.w-chochin { transform-box: fill-box; transform-origin: 50% 0; animation: chochin 3.5s ease-in-out infinite; }
+.w-paper { fill: #e7443a; filter: drop-shadow(0 0 10px rgba(255, 120, 60, .55)); }
+[data-scheme="dark"] .w-paper { fill: #ff5a43; filter: drop-shadow(0 0 16px rgba(255, 120, 60, .9)); }
+.w-rib { fill: none; stroke: rgba(0, 0, 0, .25); stroke-width: 1.5; }
+.w-cap { fill: #1e1418; }
+
+/* --- Lavender: starry hill --- */
+.w-lavender {
+  --w-sky1: #2c2a6e; --w-sky2: #7b5fb8; --w-sky3: #f3b8cf; --w-star-o: .7; --w-fly-o: .5; --w-cat: #1c1636; --w-cat-rim: #e8c8ff;
+  --w-trunk: #2c2448; --w-torii: #c8506a; --w-torii-dark: #7c2f45;
+}
+[data-scheme="dark"] .w-lavender {
+  --w-sky1: #04041a; --w-sky2: #1a1644; --w-sky3: #3a2864; --w-star-o: 1; --w-fly-o: 1; --w-cat: #05040f; --w-trunk: #0c0a1a;
+  --w-torii: #8a3048; --w-torii-dark: #4e1a2a;
+}
+.w-milky { opacity: .5; }
+[data-scheme="dark"] .w-milky { opacity: .95; }
+.w-milky-stars circle { fill: #fff; opacity: .55; }
+.w-moon { fill: #fff6dc; filter: drop-shadow(0 0 18px rgba(255, 246, 220, .6)); }
+.w-shoot { opacity: 0; }
+.w-shoot.s1 { animation: shoot 9s linear infinite; }
+.w-shoot.s2 { animation: shoot 13s linear infinite; animation-delay: -5s; }
+.w-hill-far { fill: #5d4c92; }
+.w-hill { fill: #493c7a; }
+.w-field { fill: #7b60c4; }
+.w-row { fill: none; stroke: #b49aff; stroke-width: 6; stroke-linecap: round; stroke-dasharray: 2 14; opacity: .8; }
+.w-canopy { fill: #3a2f66; }
+[data-scheme="dark"] .w-hill-far { fill: #201b42; }
+[data-scheme="dark"] .w-hill { fill: #171332; }
+[data-scheme="dark"] .w-field { fill: #251e4c; }
+[data-scheme="dark"] .w-row { stroke: #5a47a0; }
+[data-scheme="dark"] .w-canopy { fill: #110d26; }
+
+/* --- Cyber · Matrix: code rain alley --- */
+.w-matrix { --w-cat: #031006; --w-cat-rim: #39ff6a; }
+.w-matrix-bg { fill: #010602; }
+.w-col { animation: rain linear infinite; }
+.w-rain text { fill: #39ff6a; font: 700 22px var(--font-mono); text-anchor: middle; }
+.w-rain .head { fill: #eaffef; filter: drop-shadow(0 0 6px #39ff6a); }
+.w-wallc { fill: #031207; }
+.w-escape { fill: none; stroke: #0f3d18; stroke-width: 3; }
+.w-sign rect { fill: #021a06; stroke: #39ff6a; stroke-width: 2; filter: drop-shadow(0 0 8px #39ff6a); }
+.w-sign text { fill: #b4ff39; font: 700 30px var(--font-mono); text-anchor: middle; filter: drop-shadow(0 0 6px #b4ff39); }
+.w-sign.s2 text { font-size: 28px; letter-spacing: 4px; }
+.w-sign.s1 { animation: flicker 6s steps(1) infinite; }
+.w-street { fill: #020a04; }
+.w-puddles ellipse { fill: #39ff6a; opacity: .09; animation: twinkle 5s ease-in-out infinite; }
+.w-eyes circle { fill: #b4ff39; filter: drop-shadow(0 0 5px #b4ff39); animation: blink-eye 5s infinite; transform-box: fill-box; transform-origin: center; }
+[data-scheme="light"] .w-matrix-bg { fill: #dceedd; }
+[data-scheme="light"] .w-rain text { fill: #128a35; }
+[data-scheme="light"] .w-wallc, [data-scheme="light"] .w-street { fill: #b9d3bd; }
+
+/* --- Cyber · Synthwave: retro sunset --- */
+.w-synth { --w-sky1: #12002b; --w-sky2: #3e0a5f; --w-sky3: #ff4fa3; --w-cat: #0a0014; --w-cat-rim: #ff7edb; --w-star-o: .8; }
+[data-scheme="light"] .w-synth { --w-sky1: #6a3fa8; --w-sky2: #e07ac8; --w-sky3: #ffd0a8; --w-star-o: 0; }
+.w-synth-sun { filter: drop-shadow(0 0 30px rgba(255, 90, 160, .6)); }
+.w-mount { fill: #1a0638; }
+.w-mount-line { fill: none; stroke: #ff7edb; stroke-width: 2; filter: drop-shadow(0 0 5px #ff7edb); }
+.w-floor { fill: #0b0018; }
+.w-grid-h path, .w-grid-v path { stroke: #ff4fd8; stroke-width: 1.6; opacity: .7; }
+.w-grid-h { animation: grid-roll 1.6s linear infinite; }
+.w-synth .w-horizon { fill: #ffb3ec; filter: drop-shadow(0 0 8px #ff4fd8); }
+.w-palm path { fill: #0a0014; }
+.w-palm-trunk { fill: none !important; stroke: #0a0014; stroke-width: 16; stroke-linecap: round; }
+.w-palm { transform-box: fill-box; transform-origin: 50% 100%; animation: tree-sway 6s ease-in-out infinite; }
+.w-synth .w-rock { fill: #0a0014; }
+
+/* --- Cyber · Ice: aurora over a frozen city --- */
+.w-ice { --w-sky1: #020617; --w-sky2: #0a1f3a; --w-sky3: #10405a; --w-star-o: 1; --w-ice1: #1c3a55; --w-ice2: #07121e; }
+[data-scheme="light"] .w-ice { --w-sky1: #6d8fb8; --w-sky2: #a9c6e2; --w-sky3: #dcebf7; --w-star-o: 0; --w-ice1: #cfe3f3; --w-ice2: #a7c2da; }
+.w-aurora { mix-blend-mode: screen; }
+.w-aurora.a1 { animation: aurora 18s ease-in-out infinite alternate; }
+.w-aurora.a2 { animation: aurora 26s ease-in-out infinite alternate-reverse; }
+.w-glacier { fill: #b9d7f0; opacity: .85; }
+.w-glacier-hi { fill: #fff; opacity: .8; }
+.w-tower { fill: #0a2034; stroke: #2c6a94; stroke-width: 1; }
+.w-tower-line { stroke: #7cc4ff; stroke-width: 2; filter: drop-shadow(0 0 5px #7cc4ff); stroke-dasharray: 6 10; animation: tower 3s linear infinite; }
+[data-scheme="light"] .w-tower { fill: #8ea6c2; }
+.w-reflect { opacity: .22; }
+.w-cracks path { fill: none; stroke: #9fd8ff; stroke-width: 1.2; opacity: .35; }
+.w-ice-walker { transform: translate(260px, 690px); }
+
+/* --- your own picture --- */
+.wallpaper {
+  position: absolute; inset: -5%; background-size: cover; background-position: center;
+  translate: calc(var(--look-x, 0) * -16px) calc(var(--look-y, 0) * -8px);
+  transition: translate .5s var(--ease);
+  animation: kenburns 70s ease-in-out infinite alternate;
+}
+.fx-clouds .w-cloud circle, .fx-clouds .w-cloud rect { fill: #fff; opacity: .28; }
+
+/* --- wind kinds --- */
+.petal {
+  opacity: var(--leaf-o); border-radius: 80% 10% 80% 10%;
+  background: radial-gradient(circle at 30% 30%, #fff, var(--leaf-2) 45%, var(--leaf));
+}
+.petal.alt { border-radius: 10% 80% 10% 80%; }
+.bamboo-leaf {
+  width: 220% !important; height: 34% !important; opacity: var(--leaf-o);
+  border-radius: 100% 0 100% 0; background: linear-gradient(90deg, var(--leaf), var(--leaf-2));
+}
+.winds.wind-snow .wind { top: -20px !important; left: var(--x); animation-name: snowfall; animation-duration: 14s !important; }
+.snow { border-radius: 50%; background: #fff; opacity: .85; box-shadow: 0 0 6px rgba(255, 255, 255, .8); width: 45% !important; height: 45% !important; }
+.backdrop .scanlines {
+  position: absolute; inset: 0; opacity: .3; pointer-events: none;
+  background: repeating-linear-gradient(to bottom, transparent 0 2px, rgba(0, 0, 0, .14) 2px 3px);
+}
+[data-scheme="light"] .backdrop .scanlines { opacity: .06; }
+
+@keyframes cloud-slide { from { transform: translateX(-120px); } to { transform: translateX(120px); } }
+@keyframes flock { from { transform: translate(-400px, 30px); } to { transform: translate(1900px, -90px); } }
+@keyframes flap { from { transform: scaleY(1); } to { transform: scaleY(-.35); } }
+@keyframes rays { 0%, 100% { opacity: .35; } 50% { opacity: .7; } }
+@keyframes scarf { from { transform: skewY(-8deg) scaleX(.92); } to { transform: skewY(7deg) scaleX(1.08); } }
+@keyframes lamp { 0%, 100% { opacity: .85; } 50% { opacity: 1; } }
+@keyframes bamboo { 0%, 100% { transform: rotate(-.6deg); } 50% { transform: rotate(.8deg); } }
+@keyframes chochin { 0%, 100% { transform: rotate(-4deg); } 50% { transform: rotate(4deg); } }
+@keyframes shoot { 0%, 86% { opacity: 0; transform: translate(200px, 60px) rotate(20deg); } 88% { opacity: 1; } 96% { opacity: 0; transform: translate(900px, 320px) rotate(20deg); } 100% { opacity: 0; } }
+@keyframes rain { from { transform: translateY(-640px); } to { transform: translateY(1000px); } }
+@keyframes flicker { 0%, 93%, 97%, 100% { opacity: 1; } 95% { opacity: .35; } }
+@keyframes grid-roll { from { transform: translateY(0); } to { transform: translateY(28px); } }
+@keyframes aurora { from { transform: translateX(-80px) skewX(-6deg); opacity: .7; } to { transform: translateX(80px) skewX(6deg); opacity: 1; } }
+@keyframes tower { to { stroke-dashoffset: -32; } }
+@keyframes kenburns { from { transform: scale(1.02) translate(0, 0); } to { transform: scale(1.1) translate(-1.5%, -1%); } }
+@keyframes snowfall { from { transform: translate(0, -20px); } to { transform: translate(6vw, 110vh); } }
 
 /* ==========================================================================
    Animations
