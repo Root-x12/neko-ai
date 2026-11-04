@@ -1,10 +1,13 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 104">
-  <path d="M22 48 L26 8 L52 30 Z M98 48 L94 8 L68 30 Z" fill="#f27aa5"/>
-  <path d="M28 38 L30 18 L44 31 Z M92 38 L90 18 L76 31 Z" fill="#ffd1e0"/>
-  <ellipse cx="60" cy="60" rx="44" ry="36" fill="#f27aa5"/>
-  <ellipse cx="42" cy="58" rx="6" ry="8" fill="#2b1d2a"/>
-  <ellipse cx="78" cy="58" rx="6" ry="8" fill="#2b1d2a"/>
-  <circle cx="44.5" cy="54.5" r="2.2" fill="#fff"/>
-  <circle cx="80.5" cy="54.5" r="2.2" fill="#fff"/>
-  <path d="M56.5 70 h7 l-3.5 4 z" fill="#2b1d2a"/>
+  <defs>
+    <radialGradient id="f" cx="38%" cy="30%" r="75%"><stop offset="0" stop-color="#f8cf9c"/><stop offset=".55" stop-color="#f0a24f"/><stop offset="1" stop-color="#a5601f"/></radialGradient>
+    <radialGradient id="e" cx="45%" cy="40%" r="65%"><stop offset="0" stop-color="#b7e07a"/><stop offset=".45" stop-color="#4f9c5a"/><stop offset="1" stop-color="#120d10"/></radialGradient>
+  </defs>
+  <path d="M21 46 Q 19 22 27 7 Q 41 16 52 29 Z M99 46 Q 101 22 93 7 Q 79 16 68 29 Z" fill="url(#f)"/>
+  <path d="M28 37 Q 27 24 31 15 Q 39 22 45 30 Z M92 37 Q 93 24 89 15 Q 81 22 75 30 Z" fill="#f2a9a0"/>
+  <ellipse cx="60" cy="56" rx="43" ry="35" fill="url(#f)"/>
+  <ellipse cx="52" cy="72" rx="10" ry="7.5" fill="#fff1e0"/><ellipse cx="68" cy="72" rx="10" ry="7.5" fill="#fff1e0"/>
+  <ellipse cx="42" cy="55" rx="7.5" ry="9" fill="url(#e)"/><ellipse cx="78" cy="55" rx="7.5" ry="9" fill="url(#e)"/>
+  <circle cx="44.6" cy="51.4" r="2.8" fill="#fff"/><circle cx="80.6" cy="51.4" r="2.8" fill="#fff"/>
+  <path d="M55.5 66.5 Q 60 64.5 64.5 66.5 Q 62.5 70.5 60 71 Q 57.5 70.5 55.5 66.5 Z" fill="#c9576d"/>
 </svg>

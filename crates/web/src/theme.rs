@@ -26,10 +26,10 @@ pub struct Variant {
 
 pub const NEKO_VARIANTS: &[Variant] = &[
     Variant {
-        id: "sakura",
-        name: "Sakura",
-        blurb: "cherry-blossom pink",
-        swatch: ["#fff6f9", "#ffffff", "#f27aa5", "#a98bf5"],
+        id: "tabby",
+        name: "Tabby",
+        blurb: "warm amber & orange tabby",
+        swatch: ["#f8f4ec", "#ffffff", "#e08a1e", "#2f9e94"],
     },
     Variant {
         id: "matcha",
@@ -48,6 +48,12 @@ pub const NEKO_VARIANTS: &[Variant] = &[
         name: "Lavender",
         blurb: "sleepy purple dusk",
         swatch: ["#f7f4ff", "#ffffff", "#8b6cf0", "#5fb7d9"],
+    },
+    Variant {
+        id: "sakura",
+        name: "Sakura",
+        blurb: "cherry-blossom pink",
+        swatch: ["#fff6f9", "#ffffff", "#f27aa5", "#a98bf5"],
     },
 ];
 
@@ -103,6 +109,9 @@ impl Theme {
         let saved = load_pref(STORAGE_KEY).unwrap_or_default();
         let parts: Vec<&str> = saved.split('|').collect();
         let get = |i: usize| parts.get(i).copied().unwrap_or("");
+        // Prefs saved before the Tabby default (no version field) still carry the old
+        // automatic "sakura"; start those on the new default instead.
+        let neko_saved = if parts.get(5) == Some(&"2") { get(1) } else { "" };
         let window = web_sys::window().expect("window");
         let mq = window.match_media("(prefers-color-scheme: dark)").ok().flatten();
         let reduce_motion =
@@ -110,7 +119,7 @@ impl Theme {
 
         let theme = Theme {
             mode: RwSignal::new(if get(0) == "cyber" { Mode::Cyber } else { Mode::Neko }),
-            neko_variant: RwSignal::new(find(NEKO_VARIANTS, get(1))),
+            neko_variant: RwSignal::new(find(NEKO_VARIANTS, neko_saved)),
             cyber_variant: RwSignal::new(find(CYBER_VARIANTS, get(2))),
             scheme: RwSignal::new(match get(3) {
                 "light" => Scheme::Light,
@@ -180,7 +189,7 @@ impl Theme {
         save_pref(
             STORAGE_KEY,
             &format!(
-                "{mode}|{}|{}|{scheme}|{}",
+                "{mode}|{}|{}|{scheme}|{}|2",
                 self.neko_variant.get(),
                 self.cyber_variant.get(),
                 if motion { "1" } else { "0" }

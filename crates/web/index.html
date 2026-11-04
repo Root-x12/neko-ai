@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html lang="en" data-mode="neko" data-variant="sakura" data-scheme="light" data-motion="on">
+<html lang="en" data-mode="neko" data-variant="tabby" data-scheme="light" data-motion="on">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
   <meta name="color-scheme" content="light dark" />
-  <meta name="theme-color" content="#fff6f9" />
+  <meta name="theme-color" content="#14161f" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-title" content="Neko AI" />
@@ -29,8 +29,9 @@
     (function () {
       try {
         var p = (localStorage.getItem("neko.theme") || "").split("|");
+        if (p[5] !== "2") p[1] = ""; // old prefs: use the new Tabby default
         var mode = p[0] === "cyber" ? "cyber" : "neko";
-        var variant = (mode === "cyber" ? p[2] : p[1]) || (mode === "cyber" ? "neon" : "sakura");
+        var variant = (mode === "cyber" ? p[2] : p[1]) || (mode === "cyber" ? "neon" : "tabby");
         var dark = p[3] === "dark" || ((p[3] || "system") === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
         var motion = p[4] === "0" ? "off" : p[4] === "1" ? "on" : (matchMedia("(prefers-reduced-motion: reduce)").matches ? "off" : "on");
         var r = document.documentElement;

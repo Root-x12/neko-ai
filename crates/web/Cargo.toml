@@ -22,5 +22,5 @@ features = [
   "AbortController", "AbortSignal", "Clipboard", "Document", "DomTokenList", "Element", "Event", "EventTarget",
   "Headers", "HtmlElement", "HtmlInputElement", "HtmlTextAreaElement", "KeyboardEvent", "Location",
   "MediaQueryList", "Navigator", "ReadableStream", "ReadableStreamDefaultReader", "Request", "RequestCredentials", "RequestInit", "Response",
-  "ScrollBehavior", "ScrollToOptions", "Storage", "Window", "Blob", "BlobPropertyBag", "Url", "HtmlAnchorElement", "HtmlDocument", "FormData", "File", "FileList", "DataTransfer", "DataTransferItem", "DataTransferItemList", "ClipboardEvent", "DragEvent", "HtmlIFrameElement",
+  "ScrollBehavior", "ScrollToOptions", "Storage", "Window", "Blob", "BlobPropertyBag", "Url", "HtmlAnchorElement", "HtmlDocument", "FormData", "File", "FileList", "DataTransfer", "DataTransferItem", "DataTransferItemList", "ClipboardEvent", "DragEvent", "HtmlIFrameElement", "PointerEvent",
 ]
