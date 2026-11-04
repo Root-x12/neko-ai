@@ -6,6 +6,7 @@ pub mod library;
 pub mod login;
 pub mod mascot;
 pub mod params;
+pub mod scene;
 pub mod settings;
 pub mod sidebar;
 
