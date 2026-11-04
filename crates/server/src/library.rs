@@ -41,6 +41,14 @@ pub fn routes() -> Router<AppState> {
         )
         .route("/knowledge/search", get(search))
         .route("/knowledge/{id}", delete(delete_document))
+        .route("/wallpapers", get(list_wallpapers))
+        .route(
+            "/wallpapers/{slot}",
+            get(get_wallpaper)
+                .put(put_wallpaper)
+                .delete(delete_wallpaper)
+                .layer(axum::extract::DefaultBodyLimit::max(MAX_WALLPAPER + 64 * 1024)),
+        )
         .route("/conversations/{id}/export", get(export_conversation))
         .route("/export", get(export_all))
 }
@@ -293,6 +301,94 @@ pub async fn knowledge_tool(s: &AppState, user: &User, query: &str) -> Result<St
         out.push_str(&format!("\n--- {} (part {}) ---\n{}\n", h.document, h.chunk + 1, truncate(text.trim(), 2_000)));
     }
     Ok(out)
+}
+
+// ---------- wallpapers ----------
+
+const MAX_WALLPAPER: usize = 12 * 1024 * 1024;
+
+fn valid_slot(slot: &str) -> AppResult<String> {
+    if (2..=24).contains(&slot.len()) && slot.chars().all(|c| c.is_ascii_lowercase() || c == '-') {
+        Ok(slot.to_string())
+    } else {
+        Err(AppError::bad_request("Unknown theme"))
+    }
+}
+
+/// Images by content: PNG, JPEG, GIF, WebP.
+fn image_mime(b: &[u8]) -> Option<&'static str> {
+    if b.starts_with(&[0x89, b'P', b'N', b'G']) {
+        Some("image/png")
+    } else if b.starts_with(&[0xff, 0xd8, 0xff]) {
+        Some("image/jpeg")
+    } else if b.starts_with(b"GIF8") {
+        Some("image/gif")
+    } else if b.len() > 12 && &b[0..4] == b"RIFF" && &b[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else {
+        None
+    }
+}
+
+async fn list_wallpapers(State(s): State<AppState>, a: AuthUser) -> AppResult<Json<Vec<Wallpaper>>> {
+    Ok(Json(s.db.call(move |c| db::list_wallpapers(c, a.user.id)).await?))
+}
+
+async fn get_wallpaper(State(s): State<AppState>, a: AuthUser, Path(slot): Path<String>) -> AppResult<Response> {
+    let slot = valid_slot(&slot)?;
+    let (path, mime) =
+        s.db.call(move |c| db::get_wallpaper(c, a.user.id, &slot))
+            .await?
+            .ok_or_else(|| AppError::not_found("Background"))?;
+    let bytes = tokio::fs::read(uploads::uploads_dir(&s.config.data_dir).join(path))
+        .await
+        .map_err(|_| AppError::not_found("Background"))?;
+    Ok((
+        [(header::CONTENT_TYPE, mime), (header::CACHE_CONTROL, "private, max-age=31536000, immutable".to_string())],
+        bytes,
+    )
+        .into_response())
+}
+
+async fn put_wallpaper(
+    State(s): State<AppState>,
+    a: AuthUser,
+    Path(slot): Path<String>,
+    mut form: Multipart,
+) -> AppResult<Json<Wallpaper>> {
+    let slot = valid_slot(&slot)?;
+    let mut bytes = None;
+    while let Some(field) = form.next_field().await.map_err(|e| AppError::bad_request(format!("Upload failed: {e}")))? {
+        if field.name() == Some("file") {
+            bytes = Some(field.bytes().await.map_err(|e| AppError::bad_request(format!("Upload failed: {e}")))?);
+            break;
+        }
+    }
+    let bytes = bytes.ok_or_else(|| AppError::bad_request("No picture in the upload"))?;
+    if bytes.len() > MAX_WALLPAPER {
+        return Err(AppError::new(StatusCode::PAYLOAD_TOO_LARGE, "Pictures can be at most 12 MB"));
+    }
+    let mime =
+        image_mime(&bytes).ok_or_else(|| AppError::bad_request("Use a PNG, JPEG, WebP or GIF picture"))?.to_string();
+    let dir = uploads::uploads_dir(&s.config.data_dir);
+    tokio::fs::create_dir_all(&dir).await.map_err(AppError::internal)?;
+    let file = format!("wall-{}.bin", crypto::random_token());
+    tokio::fs::write(dir.join(&file), &bytes).await.map_err(AppError::internal)?;
+    let (uid, sl, f) = (a.user.id, slot.clone(), file.clone());
+    let old = s.db.call(move |c| db::set_wallpaper(c, uid, &sl, &f, &mime)).await?;
+    if let Some(old) = old {
+        uploads::remove_files(&s.config.data_dir, vec![old]).await;
+    }
+    Ok(Json(Wallpaper { slot, updated_at: db::now() }))
+}
+
+async fn delete_wallpaper(State(s): State<AppState>, a: AuthUser, Path(slot): Path<String>) -> AppResult<StatusCode> {
+    let slot = valid_slot(&slot)?;
+    let old = s.db.call(move |c| db::delete_wallpaper(c, a.user.id, &slot)).await?;
+    if let Some(old) = old {
+        uploads::remove_files(&s.config.data_dir, vec![old]).await;
+    }
+    Ok(StatusCode::NO_CONTENT)
 }
 
 // ---------- export ----------

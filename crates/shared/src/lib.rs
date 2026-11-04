@@ -784,3 +784,10 @@ pub struct DataExport {
     pub memories: Vec<Memory>,
     pub documents: Vec<Document>,
 }
+
+/// A user's own background picture for one palette (slot = palette id, e.g. "sakura").
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Wallpaper {
+    pub slot: String,
+    pub updated_at: i64,
+}

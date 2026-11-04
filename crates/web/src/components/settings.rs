@@ -114,6 +114,7 @@ fn Appearance() -> impl IntoView {
         <div class="swatches">{palette(NEKO_VARIANTS, theme.neko_variant, Mode::Neko)}</div>
         <h4>"Cyber palettes"</h4>
         <div class="swatches">{palette(CYBER_VARIANTS, theme.cyber_variant, Mode::Cyber)}</div>
+        <WallpaperPicker />
         <h4>"Brightness"</h4>
         <div class="segmented">
             {scheme_btn(Scheme::Light, "Light")}
@@ -917,5 +918,84 @@ fn Tools() -> impl IntoView {
                 </div>
             </form>
         </Show>
+    }
+}
+
+/// Upload/remove the user's own background picture for the active palette.
+#[component]
+fn WallpaperPicker() -> impl IntoView {
+    let ctx = expect_context::<Ctx>();
+    let theme = expect_context::<Theme>();
+    let input = NodeRef::<leptos::html::Input>::new();
+    let busy = RwSignal::new(false);
+    let palette_name = move || {
+        let id = theme.variant();
+        NEKO_VARIANTS.iter().chain(CYBER_VARIANTS.iter()).find(|v| v.id == id).map(|v| v.name).unwrap_or(id)
+    };
+    let has = move || {
+        let slot = theme.variant();
+        theme.wallpapers.with(|w| w.iter().any(|x| x.slot == slot))
+    };
+    let upload = move |file: web_sys::File| {
+        let slot = theme.variant().to_string();
+        busy.set(true);
+        spawn_local(async move {
+            match api::upload_with::<Wallpaper>("PUT", &format!("/wallpapers/{slot}"), &file).await {
+                Ok(w) => theme.wallpapers.update(|list| {
+                    list.retain(|x| x.slot != w.slot);
+                    list.push(w);
+                }),
+                Err(e) => ctx.error(e),
+            }
+            busy.set(false);
+        });
+    };
+    let remove = move |_| {
+        let slot = theme.variant().to_string();
+        spawn_local(async move {
+            match api::call("DELETE", &format!("/wallpapers/{slot}")).await {
+                Ok(()) => theme.wallpapers.update(|list| list.retain(|x| x.slot != slot)),
+                Err(e) => ctx.error(e),
+            }
+        });
+    };
+    view! {
+        <h4>"Your own background"</h4>
+        <p class="muted small">
+            "Use any picture, like your favourite anime artwork, as the scene for the "
+            <strong>{palette_name}</strong>
+            " palette. It slowly drifts with your mouse, and clouds and birds pass over it. The picture stays on your server."
+        </p>
+        <input
+            node_ref=input
+            type="file"
+            hidden
+            accept="image/png,image/jpeg,image/webp,image/gif"
+            on:change=move |_| {
+                if let Some(el) = input.get_untracked() {
+                    if let Some(f) = el.files().and_then(|l| l.get(0)) {
+                        upload(f);
+                    }
+                    el.set_value("");
+                }
+            }
+        />
+        <div class="wall-actions">
+            <button
+                class="btn ghost"
+                disabled=move || busy.get()
+                on:click=move |_| {
+                    if let Some(el) = input.get_untracked() {
+                        el.click();
+                    }
+                }
+            >
+                <Icon svg=icons::UPLOAD size=15 />
+                {move || if busy.get() { "Uploading…".to_string() } else if has() { "Change picture".into() } else { "Choose a picture".into() }}
+            </button>
+            <Show when=has>
+                <button class="btn ghost danger" on:click=remove>"Use the built-in scene"</button>
+            </Show>
+        </div>
     }
 }
