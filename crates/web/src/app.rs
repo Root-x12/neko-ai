@@ -11,7 +11,7 @@ use crate::{
         chat::ChatView,
         guard::GuardDialog,
         login::Login,
-        mascot::{Backdrop, Mascot},
+        mascot::{Backdrop, Mascot, MascotDefs},
         params::ParamsPanel,
         settings::SettingsModal,
         sidebar::Sidebar,
@@ -37,7 +37,10 @@ pub fn App() -> impl IntoView {
         }
     });
 
+    track_pointer();
+
     view! {
+        <MascotDefs />
         <Backdrop />
         {move || match user.get() {
             None => view! {
@@ -48,6 +51,36 @@ pub fn App() -> impl IntoView {
             Some(Some(u)) => view! { <Main user=u on_signed_out=Callback::new(move |_| user.set(Some(None))) /> }.into_any(),
         }}
     }
+}
+
+/// Feeds the pointer position (−1…1 from the window centre) to CSS as `--look-x/y`, so the
+/// cats turn their heads. One listener for the whole page, at most one update per frame.
+fn track_pointer() {
+    let pending = std::rc::Rc::new(std::cell::Cell::new(false));
+    let cb = Closure::<dyn Fn(web_sys::PointerEvent)>::new(move |ev: web_sys::PointerEvent| {
+        if pending.replace(true) {
+            return;
+        }
+        let pending = pending.clone();
+        let (x, y) = (ev.client_x() as f64, ev.client_y() as f64);
+        util::next_frame(move || {
+            pending.set(false);
+            let w = util::window();
+            let width = w.inner_width().ok().and_then(|v| v.as_f64()).unwrap_or(1.0).max(1.0);
+            let height = w.inner_height().ok().and_then(|v| v.as_f64()).unwrap_or(1.0).max(1.0);
+            let lx = ((x / width) * 2.0 - 1.0).clamp(-1.0, 1.0);
+            let ly = ((y / height) * 2.0 - 1.0).clamp(-1.0, 1.0);
+            if let Some(root) = w.document().and_then(|d| d.document_element()) {
+                if let Ok(el) = root.dyn_into::<web_sys::HtmlElement>() {
+                    let style = el.style();
+                    let _ = style.set_property("--look-x", &format!("{lx:.3}"));
+                    let _ = style.set_property("--look-y", &format!("{ly:.3}"));
+                }
+            }
+        });
+    });
+    let _ = util::window().add_event_listener_with_callback("pointermove", cb.as_ref().unchecked_ref());
+    cb.forget(); // lives as long as the page
 }
 
 #[component]

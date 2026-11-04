@@ -15,7 +15,68 @@
   --sidebar-w: 284px;
   --ease: cubic-bezier(.2, .8, .2, 1);
 
-  /* Neko · Sakura · light (default) */
+  /* Neko · Tabby · light (default) */
+  --bg: #f8f4ec;
+  --bg-2: #f1eadd;
+  --surface: #ffffff;
+  --surface-2: #faf6ef;
+  --border: #e6dcc9;
+  --text: #2b2620;
+  --text-dim: #7c7264;
+  --accent: #d97a12;
+  --accent-2: #2f9e94;
+  --accent-text: #ffffff;
+  --accent-soft: rgba(217, 122, 18, .13);
+  --user-bg: linear-gradient(135deg, #fde3c2, #d9efe9);
+  --user-text: #2b2620;
+  --code-bg: #1f2230;
+  --code-text: #eef0f6;
+  --shadow: 0 10px 30px rgba(120, 84, 30, .14);
+  --glow: none;
+  --danger: #d9455f;
+  --mascot-fur: #f0a24f;
+  --mascot-ear: #f7c9a0;
+  --mascot-line: #3a2416;
+  --petal: #f3cf9d;
+  --tok-kw: #ff9e57;
+  --tok-str: #a5e07a;
+  --tok-num: #ffd479;
+  --tok-fn: #7fd2ff;
+  --tok-type: #c8a6ff;
+  --tok-com: #8b8fa3;
+
+  /* Cat shading (derived from the palette; palettes may override) */
+  --fur: var(--mascot-fur);
+  --fur-hi: color-mix(in srgb, var(--mascot-fur) 55%, #fff);
+  --fur-lo: color-mix(in srgb, var(--mascot-fur) 62%, #2a1608);
+  --fur-ink: var(--mascot-line);
+  --ear-in: color-mix(in srgb, var(--mascot-ear) 75%, #d9667a);
+  --ear-in-hi: var(--mascot-ear);
+  --muzzle: color-mix(in srgb, var(--mascot-fur) 25%, #fff3e6);
+  --muzzle-hi: #fffaf4;
+  --iris: #4f9c5a;
+  --iris-hi: #b7e07a;
+  --nose: #c9576d;
+  --nose-hi: #f2a0ae;
+  --blush: #ff8a8a;
+  --whisker: color-mix(in srgb, var(--mascot-line) 45%, transparent);
+  --stripe: color-mix(in srgb, var(--mascot-fur) 45%, #7a3b0c);
+  --metal: #2a3346;
+  --metal-hi: #8ea2c4;
+  --metal-lo: #0b0f18;
+  --look-x: 0;
+  --look-y: 0;
+}
+
+/* ---------- Neko palettes ---------- */
+[data-mode="neko"][data-variant="tabby"][data-scheme="dark"] {
+  --bg: #14161f; --bg-2: #191c27; --surface: #1f2230; --surface-2: #262a3a; --border: #343a4f;
+  --text: #eef0f6; --text-dim: #9aa1b5; --accent: #f5a524; --accent-2: #4fd1c5; --accent-text: #1a1206;
+  --accent-soft: rgba(245, 165, 36, .14); --user-bg: linear-gradient(135deg, #3d2f1a, #1d3b3c); --user-text: #f6f2ea;
+  --code-bg: #0e1017; --shadow: 0 10px 30px rgba(0, 0, 0, .4); --mascot-fur: #f0a24f; --mascot-ear: #f7c9a0;
+  --mascot-line: #2a1a10; --petal: #3a3424;
+}
+[data-mode="neko"][data-variant="sakura"] {
   --bg: #fff6f9;
   --bg-2: #ffeef4;
   --surface: #ffffff;
@@ -44,9 +105,8 @@
   --tok-fn: #8fd3ff;
   --tok-type: #c9a8ff;
   --tok-com: #9a8aa6;
+  --iris: #3b2a3a; --iris-hi: #8a6c8a; --stripe: transparent;
 }
-
-/* ---------- Neko palettes ---------- */
 [data-mode="neko"][data-variant="sakura"][data-scheme="dark"] {
   --bg: #1d1520; --bg-2: #241a28; --surface: #2a1f2e; --surface-2: #33263a; --border: #47334f;
   --text: #f7e8f0; --text-dim: #b79db0; --accent: #ff8fb8; --accent-2: #b9a0ff; --accent-text: #2a1020;
@@ -54,6 +114,9 @@
   --code-bg: #150f18; --shadow: 0 10px 30px rgba(0, 0, 0, .35); --mascot-fur: #ff9fc3; --mascot-ear: #ffd6e5;
   --mascot-line: #2a1020; --petal: #7a3d5a;
 }
+[data-mode="neko"][data-variant="sakura"], [data-mode="neko"][data-variant="matcha"], [data-mode="neko"][data-variant="mochi"], [data-mode="neko"][data-variant="lavender"] { --stripe: transparent; }
+[data-mode="neko"][data-variant="matcha"] { --iris: #6b4a2a; --iris-hi: #d9a45b; }
+[data-mode="neko"][data-variant="lavender"] { --iris: #3d5fa8; --iris-hi: #9fd1f0; }
 [data-mode="neko"][data-variant="matcha"] {
   --bg: #f5f8ef; --bg-2: #ecf2e2; --surface: #ffffff; --surface-2: #f1f6e9; --border: #d7e4c5;
   --text: #2f3a26; --text-dim: #74826a; --accent: #6aa84f; --accent-2: #d9a45b; --accent-text: #ffffff;
@@ -482,7 +545,7 @@ input[type="range"] { width: 100%; }
   border-radius: var(--radius); border: 2px solid var(--border); background: var(--surface-2);
 }
 .mode-card.active { border-color: var(--accent); box-shadow: var(--glow); }
-.mode-card[data-preview="neko"] .icon { color: #f27aa5; }
+.mode-card[data-preview="neko"] .icon { color: #e08a1e; }
 .mode-card[data-preview="cyber"] .icon { color: #22e4ff; }
 .swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
 .swatch { display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: var(--radius-sm); border: 2px solid var(--border); background: var(--surface); font-weight: 600; font-size: 14px; }
@@ -526,6 +589,7 @@ input[type="range"] { width: 100%; }
 .login-page { height: 100dvh; }
 .login-toggles { position: fixed; top: calc(14px + env(safe-area-inset-top)); right: 16px; }
 .login-card { width: min(380px, 100%); padding: 28px 26px; text-align: center; }
+.login-card .mascot { margin: 0 auto; }
 .login-card .field { text-align: left; }
 .login-card .btn + .btn { margin-top: 8px; }
 .brand-title { margin: 6px 0 0; font-size: 28px; font-weight: 800; }
@@ -718,38 +782,58 @@ a.btn { text-decoration: none; color: var(--text); }
   html.printing body { overflow: visible; background: #fff !important; color: #111 !important; }
   html.printing body > *:not(#print-root) { display: none !important; }
   html.printing #print-root { display: block; font-family: "Segoe UI", system-ui, sans-serif; color: #111; }
-  .print-head { border-bottom: 2px solid #f27aa5; margin-bottom: 18px; }
+  .print-head { border-bottom: 2px solid #d97a12; margin-bottom: 18px; }
   .print-head h1 { margin: 0 0 4px; font-size: 22px; }
   .print-head p { margin: 0 0 10px; color: #666; font-size: 12px; }
   .print-msg { margin: 0 0 16px; break-inside: avoid-page; }
-  .print-who { font-weight: 700; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: #c2407a; margin-bottom: 4px; }
-  .print-msg.user .md { background: #fbeff4; padding: 8px 12px; border-radius: 8px; }
+  .print-who { font-weight: 700; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: #b4620c; margin-bottom: 4px; }
+  .print-msg.user .md { background: #fbf3e6; padding: 8px 12px; border-radius: 8px; }
   #print-root .md { font-size: 13px; line-height: 1.55; color: #111; }
   #print-root .code-block { background: #f6f6f8 !important; border: 1px solid #ddd; box-shadow: none !important; }
   #print-root .code-block code { color: #222 !important; white-space: pre-wrap; }
   #print-root .code-head { color: #666; background: #eee; }
   #print-root .copy-btn { display: none; }
-  #print-root a { color: #c2407a; }
+  #print-root a { color: #b4620c; }
   @page { margin: 16mm; }
 }
 
 /* ==========================================================================
-   Mascot
+   Mascot: a shaded, softly 3D cat (gradients live in <MascotDefs>)
    ========================================================================== */
 
-.mascot { width: 64px; height: 56px; flex: none; }
-.mascot.big { width: 132px; height: 116px; }
+.mascot-defs { position: absolute; width: 0; height: 0; overflow: hidden; }
+.mascot { width: 64px; height: 60px; flex: none; perspective: 420px; }
+.mascot.big { width: 140px; height: 130px; }
 .mascot svg { width: 100%; height: 100%; overflow: visible; }
-.mascot .head, .mascot .ear-outer { fill: var(--mascot-fur); stroke: var(--mascot-line); stroke-width: 3; stroke-linejoin: round; }
-.mascot .ear-inner { fill: var(--mascot-ear); }
-.mascot .eye { fill: var(--mascot-line); }
+
+.mascot .shadow { fill: url(#m-shadow); }
+.mascot .head, .mascot .ear-outer { fill: url(#m-fur); }
+.mascot .ear-outer { fill: url(#m-ear); }
+.mascot .ear-inner { fill: url(#m-ear-in); }
+.mascot .body { fill: url(#m-body); }
+.mascot .paw { fill: url(#m-muzzle); }
+.mascot .muzzle { fill: url(#m-muzzle); }
+.mascot .gloss { fill: url(#m-gloss); opacity: .55; }
+.mascot .stripes path { fill: var(--stripe, transparent); }
+.mascot .eye { fill: url(#m-eye); }
 .mascot .shine { fill: #fff; }
-.mascot .nose { fill: var(--mascot-line); }
-.mascot .mouth, .mascot .whiskers path, .mascot .tail path, .mascot .sleep-eye { fill: none; stroke: var(--mascot-line); stroke-width: 2.5; stroke-linecap: round; }
-.mascot .tail path { stroke-width: 6; stroke: var(--mascot-fur); }
-.mascot .blush { fill: #ff7aa8; opacity: .45; }
+.mascot .shine.small { opacity: .8; }
+.mascot .nose { fill: url(#m-nose); }
+.mascot .mouth, .mascot .sleep-eye { fill: none; stroke: var(--fur-ink); stroke-width: 2.2; stroke-linecap: round; }
+.mascot .whiskers path { fill: none; stroke: var(--whisker); stroke-width: 1.4; stroke-linecap: round; }
+.mascot .tail path { fill: none; stroke: url(#m-body); stroke-width: 9; stroke-linecap: round; }
+.mascot .blush { fill: var(--blush); opacity: .45; }
 .mascot .visor, .mascot .visor-scan, .mascot .sleep-eye, .mascot .zzz { display: none; }
 .mascot .zzz text { fill: var(--accent); font: 700 13px var(--font-ui); }
+
+/* Depth: the head turns towards the pointer, the eyes look a little further. */
+.mascot .head-group {
+  transform-box: view-box; transform-origin: 60px 60px;
+  transform: rotateY(calc(var(--look-x, 0) * 14deg)) rotateX(calc(var(--look-y, 0) * -10deg)) translateX(calc(var(--look-x, 0) * 1.5px));
+  transition: transform .25s var(--ease);
+}
+.mascot .pupil { transform: translate(calc(var(--look-x, 0) * 2.4px), calc(var(--look-y, 0) * 2px)); transition: transform .2s var(--ease); }
+.mascot .gloss { transform: translate(calc(var(--look-x, 0) * -2px), calc(var(--look-y, 0) * -1.5px)); }
 
 .mascot .ear { transform-box: fill-box; transform-origin: 50% 100%; }
 .mascot .eye-wrap { transform-box: fill-box; transform-origin: center; animation: blink-eye 4.5s infinite; }
@@ -765,19 +849,29 @@ a.btn { text-decoration: none; color: var(--text); }
 .mascot[data-state="sleep"] .zzz text:nth-child(2) { animation-delay: .8s; }
 .mascot[data-state="sleep"] svg { animation: breathe 3.5s ease-in-out infinite; }
 .mascot[data-state="sleep"] .tail { animation: none; }
+.mascot[data-state="sleep"] .head-group { transform: none; }
 
-/* Cyber cat: hollow neon outline with a scanning visor */
-[data-mode="cyber"] .mascot svg { filter: drop-shadow(0 0 4px var(--mascot-line)); }
-[data-mode="cyber"][data-scheme="light"] .mascot svg { filter: none; }
-[data-mode="cyber"] .mascot .head, [data-mode="cyber"] .mascot .ear-outer { stroke-width: 2.5; }
-[data-mode="cyber"] .mascot .ear-inner { fill: none; stroke: var(--mascot-ear); stroke-width: 1.5; opacity: .7; }
-[data-mode="cyber"] .mascot .blush, [data-mode="cyber"] .mascot .eyes { display: none; }
-[data-mode="cyber"] .mascot .visor { display: block; fill: color-mix(in srgb, var(--mascot-line) 18%, transparent); stroke: var(--mascot-line); stroke-width: 2; }
+/* Cyber cat: polished chrome robot with a neon visor */
+[data-mode="cyber"] .mascot svg { filter: drop-shadow(0 0 5px color-mix(in srgb, var(--mascot-line) 55%, transparent)); }
+[data-mode="cyber"][data-scheme="light"] .mascot svg { filter: drop-shadow(0 2px 3px rgba(15, 23, 41, .25)); }
+[data-mode="cyber"] .mascot .head, [data-mode="cyber"] .mascot .ear-outer, [data-mode="cyber"] .mascot .body {
+  fill: url(#m-metal); stroke: var(--mascot-line); stroke-width: 1.6; stroke-linejoin: round;
+}
+[data-mode="cyber"] .mascot .ear-inner { fill: color-mix(in srgb, var(--mascot-line) 35%, transparent); }
+[data-mode="cyber"] .mascot .paw { fill: url(#m-metal); stroke: var(--mascot-line); stroke-width: 1.2; }
+[data-mode="cyber"] .mascot .muzzle { fill: color-mix(in srgb, var(--metal-hi) 70%, transparent); }
+[data-mode="cyber"] .mascot .gloss { opacity: .35; }
+[data-mode="cyber"] .mascot .blush, [data-mode="cyber"] .mascot .eyes, [data-mode="cyber"] .mascot .stripes { display: none; }
+[data-mode="cyber"] .mascot .nose { fill: var(--mascot-line); }
+[data-mode="cyber"] .mascot .mouth { stroke: var(--mascot-line); }
+[data-mode="cyber"] .mascot .whiskers path { stroke: var(--mascot-line); opacity: .7; }
+[data-mode="cyber"] .mascot .visor { display: block; fill: color-mix(in srgb, var(--mascot-line) 22%, #000); stroke: var(--mascot-line); stroke-width: 2; }
 [data-mode="cyber"] .mascot .visor-scan { display: block; fill: var(--accent-2, var(--mascot-line)); animation: scan 2.4s ease-in-out infinite; }
 [data-mode="cyber"] .mascot[data-state="thinking"] .visor-scan { animation-duration: .7s; }
 [data-mode="cyber"] .mascot[data-state="sleep"] .visor-scan { animation: none; opacity: .25; }
-[data-mode="cyber"] .mascot .tail path { stroke: var(--mascot-line); stroke-width: 2.5; stroke-dasharray: 4 3; }
+[data-mode="cyber"] .mascot .tail path { stroke: var(--mascot-line); stroke-width: 3; stroke-dasharray: 5 3; }
 [data-mode="cyber"] .mascot .zzz text { font-family: var(--font-mono); }
+[data-motion="off"] .mascot .head-group, [data-motion="off"] .mascot .pupil, [data-motion="off"] .mascot .gloss { transform: none; }
 
 /* ==========================================================================
    Animated backdrop

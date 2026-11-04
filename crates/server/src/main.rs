@@ -9,7 +9,7 @@ fn main() {
         .map_err(anyhow::Error::from)
         .and_then(|rt| rt.block_on(run()));
     if let Err(e) = result {
-        eprintln!("\n  Neko AI could not start: {e:#}\n");
+        eprintln!("\n  Neko AI error: {e:#}\n");
         // A double-clicked program's window would close before the message can be read.
         use std::io::IsTerminal;
         if std::io::stdin().is_terminal() {
@@ -26,6 +26,10 @@ async fn run() -> anyhow::Result<()> {
         .init();
 
     let config = Config::from_env()?;
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if !args.is_empty() {
+        return command(&config, &args).await;
+    }
     std::fs::create_dir_all(&config.data_dir)
         .with_context(|| format!("creating data directory {}", config.data_dir.display()))?;
     let db = db::Db::open(&config.data_dir.join("neko.db")).context("opening database")?;
@@ -63,6 +67,45 @@ async fn run() -> anyhow::Result<()> {
         .with_graceful_shutdown(shutdown_signal())
         .await?;
     Ok(())
+}
+
+/// Maintenance commands, e.g. `neko-ai reset-password alice` when a password is forgotten.
+async fn command(config: &Config, args: &[String]) -> anyhow::Result<()> {
+    let open_db = || db::Db::open(&config.data_dir.join("neko.db")).context("opening database");
+    match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
+        ["list-users"] => {
+            let db = open_db()?;
+            let users = db.call(|c| db::list_users(c)).await?;
+            if users.is_empty() {
+                println!("No accounts yet. Start Neko AI and create one in the browser.");
+            }
+            for u in users {
+                println!("{:<24} {:<6} {}", u.username, u.role.as_str(), if u.disabled { "disabled" } else { "" });
+            }
+            Ok(())
+        }
+        ["reset-password", username] => {
+            let db = open_db()?;
+            let name = username.to_string();
+            let found = db.call(move |c| db::find_user_by_name(c, &name)).await?;
+            let Some(rec) = found else { anyhow::bail!("No account called “{username}”. Try: neko-ai list-users") };
+            let password = crypto::random_code();
+            let hash = crypto::hash_password(&password)?;
+            let id = rec.user.id;
+            let update = neko_shared::UpdateUser { disabled: Some(false), ..Default::default() };
+            db.call(move |c| db::update_user(c, id, &update, Some(&hash))).await?;
+            println!("New password for {}: {password}", rec.user.username);
+            println!("Sign in with it, then change it in Settings → Account. Other sessions were signed out.");
+            Ok(())
+        }
+        _ => {
+            println!("Usage:");
+            println!("  neko-ai                          start the server");
+            println!("  neko-ai list-users               show accounts");
+            println!("  neko-ai reset-password <user>    set a new random password (and re-enable the account)");
+            Ok(())
+        }
+    }
 }
 
 fn print_banner(config: &Config, setup_code: Option<&str>) {
