@@ -20,6 +20,22 @@ pub struct Config {
     pub trust_proxy: bool,
     /// Audit entries older than this are deleted. `None` keeps them forever.
     pub audit_retention_days: Option<u32>,
+    /// Running from a downloaded release (web files next to the program): open the browser.
+    pub bundled: bool,
+}
+
+/// Where the web UI and data live when not set explicitly. In a source checkout that's the
+/// build output; in a downloaded release it's the folders next to the program, so double-clicking
+/// works no matter which directory the system starts it in.
+fn default_dirs() -> (PathBuf, PathBuf, bool) {
+    let dev = PathBuf::from("crates/web/dist");
+    if dev.join("index.html").exists() {
+        return (PathBuf::from("data"), dev, false);
+    }
+    match std::env::current_exe().ok().and_then(|p| p.parent().map(PathBuf::from)) {
+        Some(dir) if dir.join("web").join("index.html").exists() => (dir.join("data"), dir.join("web"), true),
+        _ => (PathBuf::from("data"), dev, false),
+    }
 }
 
 impl Config {
@@ -27,10 +43,12 @@ impl Config {
         let bind = env_or("NEKO_BIND", "0.0.0.0:8080")
             .parse()
             .map_err(|e| anyhow::anyhow!("NEKO_BIND is not a valid address: {e}"))?;
+        let (data_dir, web_dir, bundled) = default_dirs();
         Ok(Self {
             bind,
-            data_dir: PathBuf::from(env_or("NEKO_DATA_DIR", "data")),
-            web_dir: PathBuf::from(env_or("NEKO_WEB_DIR", "crates/web/dist")),
+            data_dir: std::env::var("NEKO_DATA_DIR").map(PathBuf::from).unwrap_or(data_dir),
+            web_dir: std::env::var("NEKO_WEB_DIR").map(PathBuf::from).unwrap_or(web_dir),
+            bundled: bundled && !env_flag("NEKO_NO_BROWSER"),
             allow_signup: env_flag("NEKO_ALLOW_SIGNUP"),
             secure_cookies: env_flag("NEKO_SECURE_COOKIES"),
             fetch_allow_private: env_flag("NEKO_FETCH_ALLOW_PRIVATE"),

@@ -34,7 +34,24 @@ Each mode has a light and a dark version. There's an animated cat mascot that bl
 | **Export** | Any chat as Markdown, JSON or PDF (via the browser's print dialog), plus "Download all my data" as one JSON file |
 | **Privacy** | No telemetry, no CDNs, no external fonts. API keys are encrypted at rest (ChaCha20-Poly1305) and never sent back to the browser |
 
-## Quick start
+## Download (no Rust needed)
+
+Grab the zip for your computer from the **[latest release](https://github.com/Root-x12/neko-ai/releases/latest)**:
+
+| Computer | File |
+|---|---|
+| Windows | `neko-ai-windows-x64.zip` |
+| Mac (M1/M2/M3/M4) | `neko-ai-macos-apple-silicon.zip` |
+| Mac (Intel) | `neko-ai-macos-intel.zip` |
+| Linux | `neko-ai-linux-x64.zip` |
+
+1. Unzip it and double-click `neko-ai` (`neko-ai.exe` on Windows). On a Mac, the first time: right-click → Open → Open.
+2. Your browser opens http://localhost:8080. Create your account with the **setup code** shown in the window.
+3. No API key yet? Look around, change themes, set things up. Add a key later in **Settings → Providers**.
+
+Keep the window open while you use it; your chats live in the `data` folder next to the program.
+
+## Build from source
 
 You need [Rust](https://rustup.rs) (stable).
 
