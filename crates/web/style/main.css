@@ -887,10 +887,6 @@ a.btn { text-decoration: none; color: var(--text); }
    ========================================================================== */
 
 .backdrop { position: fixed; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; background: var(--bg); }
-.neko-bg, .cyber-bg { position: absolute; inset: 0; transition: opacity .8s var(--ease); }
-[data-mode="neko"] .cyber-bg, [data-mode="cyber"] .neko-bg { opacity: 0; }
-[data-mode="neko"] .neko-bg *, [data-mode="cyber"] .cyber-bg * { animation-play-state: running; }
-[data-mode="cyber"] .neko-bg *, [data-mode="neko"] .cyber-bg * { animation-play-state: paused; }
 .scene-host, .scene { position: absolute; inset: 0; width: 100%; height: 100%; }
 /* A soft wash keeps the app readable over the scenery. */
 .veil { position: absolute; inset: 0; background: linear-gradient(to bottom, color-mix(in srgb, var(--bg) 18%, transparent), color-mix(in srgb, var(--bg) 8%, transparent) 40%, color-mix(in srgb, var(--bg) 30%, transparent)); }
@@ -924,64 +920,12 @@ a.btn { text-decoration: none; color: var(--text); }
   --cy-lake-top: #cdd6e6; --cy-lake-bot: #b7c3d8; --cy-city: #7d8aa3; --cy-pier: #8794ad;
 }
 
-/* --- Neko: lake below Mt. Fuji --- */
-.neko-scene .stars, .neko-scene .fireflies { opacity: var(--star-o); }
-.neko-scene .star { fill: #fff; animation: twinkle 4s ease-in-out infinite; }
-.neko-scene .sun { fill: var(--sun); }
-.neko-scene .sun-glow { opacity: .8; }
-.neko-scene .cloud ellipse { fill: var(--cloud); opacity: var(--cloud-o); }
-.neko-scene .c1 { animation: cloud-drift 140s linear infinite; }
-.neko-scene .c2 { animation: cloud-drift 190s linear infinite; animation-delay: -60s; }
-.neko-scene .c3 { animation: cloud-drift 160s linear infinite; animation-delay: -110s; }
-.neko-scene .mtn { fill: var(--mtn); }
-.neko-scene .snow { fill: var(--snow); }
-.neko-scene .hill-far { fill: var(--hill-far); }
-.neko-scene .reflection { opacity: .22; }
-.neko-scene .shimmer { fill: #fff; opacity: 0; animation: shimmer 5s ease-in-out infinite; }
-.neko-scene .shore { fill: var(--shore); }
-.neko-scene .torii rect, .neko-scene .torii path { fill: var(--torii); }
-.neko-scene .blade { fill: none; stroke: var(--grass); stroke-width: 3; stroke-linecap: round; transform-box: fill-box; transform-origin: 50% 100%; animation: sway 4s ease-in-out infinite; }
-.neko-scene .trunk { fill: none; stroke: var(--trunk); stroke-width: 16; stroke-linecap: round; }
-.neko-scene .foliage circle { fill: var(--foliage); }
-.neko-scene .foliage-hi circle { fill: var(--foliage-2); opacity: .8; }
-.neko-scene .tree { transform-box: fill-box; transform-origin: 70% 100%; animation: tree-sway 7s ease-in-out infinite; }
-.neko-scene .fireflies { opacity: var(--fly-o); }
-.neko-scene .firefly { fill: #fff6a8; animation: firefly 7s ease-in-out infinite; }
 
-.boat-wrap { animation: boat-drift 120s ease-in-out infinite alternate; }
-.neko-scene .boat-wrap { transform: translate(560px, 650px); }
-.boat { animation: bob 5s ease-in-out infinite; }
-.neko-scene .hull { fill: var(--boat); }
-.neko-scene .hull-rim { stroke: var(--boat-rim); stroke-width: 3; }
-.neko-scene .mast { stroke: var(--boat-rim); stroke-width: 2.5; }
-.neko-scene .lantern { fill: var(--lantern); filter: drop-shadow(0 0 6px var(--lantern)); }
-.neko-scene .ripple { fill: none; stroke: #fff; stroke-width: 1.5; opacity: .35; transform-box: fill-box; transform-origin: center; animation: ripple 5s ease-in-out infinite; }
-.boat-cat .bc-fur { fill: var(--fur); stroke: var(--fur-ink); stroke-width: 1.2; }
-.boat-cat .bc-ear { fill: var(--ear-in); }
-.boat-cat .bc-tail { fill: none; stroke: var(--fur); stroke-width: 4; stroke-linecap: round; transform-box: fill-box; transform-origin: 0 100%; animation: wag 3.5s ease-in-out infinite; }
 
-/* --- Cyber: neon lakeside at night --- */
-.cyber-scene .star { fill: #fff; opacity: .6; animation: twinkle 5s ease-in-out infinite; }
-[data-scheme="light"] .cyber-scene .star { opacity: 0; }
-.cyber-scene .c-sun { opacity: .7; }
-.cyber-scene .city rect { fill: var(--cy-city); }
-.cyber-scene .antenna { fill: var(--cy-city); }
-.cyber-scene .beacon { fill: var(--danger); animation: beacon 2.4s steps(1) infinite; }
-.cyber-scene .windows { opacity: .55; }
-.cyber-scene .win { fill: var(--accent); }
-.cyber-scene .win.alt { fill: var(--accent-2); }
-.cyber-scene .win.twinkle { animation: twinkle 3s ease-in-out infinite; }
-.cyber-scene .c-reflection { opacity: .28; }
-.cyber-scene .horizon { fill: var(--accent); opacity: .5; }
-.cyber-scene .scan { fill: var(--accent); opacity: 0; animation: shimmer 6s ease-in-out infinite; }
-.cyber-scene .boat-wrap { transform: translate(900px, 660px); animation-duration: 150s; }
-.cyber-scene .hull { fill: var(--cy-pier); stroke: var(--accent); stroke-width: 2; filter: drop-shadow(0 0 6px var(--accent)); }
-.cyber-scene .mast { stroke: var(--accent); stroke-width: 2; }
-.cyber-scene .lamp { fill: var(--accent-2); filter: drop-shadow(0 0 8px var(--accent-2)); animation: twinkle 3s ease-in-out infinite; }
-.cyber-scene .ripple { fill: none; stroke: var(--accent); stroke-width: 1.2; opacity: .5; transform-box: fill-box; transform-origin: center; animation: ripple 5s ease-in-out infinite; }
-.cyber-scene .pier, .cyber-scene .posts rect, .cyber-scene .shore-r { fill: var(--cy-pier); }
-.cyber-scene .pier-edge { stroke: var(--accent); stroke-width: 2; filter: drop-shadow(0 0 4px var(--accent)); }
-.walker { transform: translate(380px, 700px); animation: walk-path 46s linear infinite; }
+/* --- the robot cat that walks the shore in Cyber scenes --- */
+/* Position comes from --wx/--wy so the walk can animate `transform`, which browsers move
+   without repainting (animating the separate `translate` property repaints every frame). */
+.walker { --wx: 380px; --wy: 700px; transform: translate(var(--wx), var(--wy)); animation: walk-path 46s linear infinite; }
 .walker-flip { animation: walk-flip 46s steps(1) infinite; }
 .walk-cat { animation: bob .6s ease-in-out infinite; }
 .walk-cat .wc-body, .walk-cat .wc-head, .walk-cat .wc-ear { fill: var(--cy-pier); stroke: var(--accent); stroke-width: 1.8; stroke-linejoin: round; }
@@ -1022,15 +966,13 @@ a.btn { text-decoration: none; color: var(--text); }
 .empty > p { background: color-mix(in srgb, var(--bg) 60%, transparent); padding: 4px 12px; border-radius: 999px; }
 
 @keyframes twinkle { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
-@keyframes cloud-drift { from { transform: translateX(-500px); } to { transform: translateX(1800px); } }
-@keyframes shimmer { 0%, 100% { opacity: 0; transform: translateX(0); } 50% { opacity: .5; transform: translateX(14px); } }
-@keyframes sway { 0%, 100% { transform: rotate(-4deg); } 50% { transform: rotate(6deg); } }
 @keyframes tree-sway { 0%, 100% { transform: rotate(0); } 50% { transform: rotate(1.2deg); } }
 @keyframes firefly { 0%, 100% { transform: translate(0, 0); opacity: 0; } 30% { opacity: .9; } 50% { transform: translate(18px, -14px); opacity: .3; } 70% { opacity: 1; } }
-@keyframes boat-drift { from { translate: -260px 0; } to { translate: 300px 0; } }
-@keyframes ripple { 0%, 100% { transform: scale(.9); opacity: .2; } 50% { transform: scale(1.08); opacity: .45; } }
 @keyframes beacon { 0%, 60% { opacity: 1; } 61%, 100% { opacity: .15; } }
-@keyframes walk-path { 0% { translate: 0 0; } 48% { translate: 400px 0; } 52% { translate: 400px 0; } 98% { translate: 0 0; } 100% { translate: 0 0; } }
+@keyframes walk-path {
+  0%, 98%, 100% { transform: translate(var(--wx), var(--wy)); }
+  48%, 52% { transform: translate(calc(var(--wx) + 400px), var(--wy)); }
+}
 @keyframes walk-flip { 0% { transform: scaleX(1); } 50% { transform: scaleX(-1); } }
 @keyframes step { 0%, 100% { transform: rotate(-18deg); } 50% { transform: rotate(18deg); } }
 @keyframes wind {
@@ -1233,7 +1175,244 @@ a.btn { text-decoration: none; color: var(--text); }
 [data-scheme="light"] .w-tower { fill: #8ea6c2; }
 .w-reflect { opacity: .22; }
 .w-cracks path { fill: none; stroke: #9fd8ff; stroke-width: 1.2; opacity: .35; }
-.w-ice-walker { transform: translate(260px, 690px); }
+.w-ice-walker { --wx: 260px; --wy: 690px; }
+
+/* --- Blossom valley (components/valley.rs): the default scene for Tabby and Neon --- */
+.w-valley {
+  overflow: visible;
+  --va-sky1: #2f7fd8; --va-sky2: #7cc0f2; --va-sky3: #dff3ff; --va-sun: #fffbe6; --va-moon-o: 0; --va-star-o: 0; --va-wisp-o: .6;
+  --va-c0: #b9d2ee; --va-c1: #f1f7ff; --va-c2: #ffffff; --va-cloud-o: 1;
+  --va-mtf: #a9c0e2; --va-mt1: #6f84b4; --va-mt2: #b4c9e6; --va-mt-sh: #4b5f93; --va-snow: #ffffff; --va-haze: #cfe2f4; --va-ridge: transparent;
+  --va-sl1: #3f5887; --va-sl2: #4f7f7a; --va-pine1: #2f5c58; --va-pine2: #3f7a5e;
+  --va-hill1: #86cc6e; --va-hill2: #4f9a62; --va-hill-hi: #c2ec8c; --va-mist: #ffffff; --va-mist-o: .75;
+  --va-lake1: #bfe6ea; --va-lake2: #4d9fb6; --va-lake3: #1f4f72; --va-refl-o: .34; --va-flow: #ffffff; --va-glint: #ffffff;
+  --va-rock: #2d3a4f; --va-rock-hi: #5d6c84; --va-rock-lit: #d2c9b0; --va-moss: #4f9a46; --va-moss-hi: #a7df62;
+  --va-g0: #2e6b3e; --va-g1: #4c9a4c; --va-g2: #7cc45c; --va-g3: #c5ec8a;
+  --va-b0: #d4588e; --va-b1: #f48db6; --va-b2: #ffb9d3; --va-b3: #ffe2ec;
+  --va-trunk: #3a2733; --va-trunk-hi: #8a6370;
+  --va-roof: #26314f; --va-roof-edge: #9fb2dc; --va-wall: #1e2740; --va-win: #3a4a74; --va-wood: #141a2c; --va-stone: #8791a6;
+  --va-ray-o: .5; --va-fall: #ffffff;
+  --w-bird: #ffffff; --w-cat: #1c2543; --w-cat-rim: #ffd9e6; --w-stone: #59657f; --w-lamp: #ffd27a;
+}
+[data-scheme="dark"] .w-valley {
+  --va-sky1: #060a22; --va-sky2: #16245a; --va-sky3: #4a4a8c; --va-sun: #cfd8ff; --va-moon-o: 1; --va-star-o: 1; --va-wisp-o: .08;
+  --va-c0: #1c2750; --va-c1: #2e3c6e; --va-c2: #46558c; --va-cloud-o: .9;
+  --va-mtf: #222d58; --va-mt1: #2a3566; --va-mt2: #3b4a80; --va-mt-sh: #171f44; --va-snow: #c9d4ff; --va-haze: #39457c;
+  --va-sl1: #111a38; --va-sl2: #152a35; --va-pine1: #0c1c26; --va-pine2: #12283a;
+  --va-hill1: #1f3d44; --va-hill2: #142a33; --va-hill-hi: #2f5a56; --va-mist: #aab8ff; --va-mist-o: .22;
+  --va-lake1: #2c3a78; --va-lake2: #141e4c; --va-lake3: #070b22; --va-refl-o: .3; --va-flow: #b9c8ff; --va-glint: #e8eeff;
+  --va-rock: #0b1024; --va-rock-hi: #1c2544; --va-rock-lit: #3a4878; --va-moss: #173a34; --va-moss-hi: #2b6a55;
+  --va-g0: #0c2222; --va-g1: #143432; --va-g2: #1f4b43; --va-g3: #37705f;
+  --va-b0: #6a2d5c; --va-b1: #a8527f; --va-b2: #d985a8; --va-b3: #ffd3e3;
+  --va-trunk: #0e0a16; --va-trunk-hi: #3a2a44;
+  --va-roof: #0a0f22; --va-roof-edge: #56689c; --va-wall: #0c1226; --va-win: #ffc86a; --va-wood: #060913; --va-stone: #2a3350;
+  --va-ray-o: .12; --va-fall: #c9d4ff;
+  --w-bird: #aab6e6; --w-cat: #070a18; --w-cat-rim: #9fb8ff; --w-stone: #2a3350; --w-lamp: #ffc45a;
+}
+[data-scheme="dark"] .w-valley.cyber {
+  --va-sky1: #05030f; --va-sky2: #1a0b3a; --va-sky3: #4a1464; --va-sun: #ff4fb8; --va-moon-o: 0; --va-star-o: 1; --va-wisp-o: .1;
+  --va-c0: #160b33; --va-c1: #2a1452; --va-c2: #4a1f78; --va-cloud-o: .8;
+  --va-mtf: #1d1146; --va-mt1: #150d33; --va-mt2: #2a1a5c; --va-mt-sh: #0a0620; --va-snow: #5ee9ff; --va-haze: #3a1466; --va-ridge: #22e4ff;
+  --va-sl1: #0b0822; --va-sl2: #10143a; --va-pine1: #0a0d26; --va-pine2: #121a44;
+  --va-hill1: #14143c; --va-hill2: #0c0a26; --va-hill-hi: #26207a; --va-mist: #c86bff; --va-mist-o: .22;
+  --va-lake1: #2a1466; --va-lake2: #0e0a30; --va-lake3: #04030d; --va-refl-o: .4; --va-flow: #22e4ff; --va-glint: #ff8fe0;
+  --va-rock: #07061a; --va-rock-hi: #141238; --va-rock-lit: #2a2470; --va-moss: #10305a; --va-moss-hi: #1f8fbe;
+  --va-g0: #0a1238; --va-g1: #102260; --va-g2: #1a3f8e; --va-g3: #37b6e6;
+  --va-b0: #7a1c8a; --va-b1: #e0389f; --va-b2: #ff6ec7; --va-b3: #ffd0f2;
+  --va-trunk: #08051a; --va-trunk-hi: #5a2a8a;
+  --va-roof: #0a0822; --va-roof-edge: #22e4ff; --va-wall: #0d0a2a; --va-win: #ff3cac; --va-wood: #05040f; --va-stone: #1c1a44;
+  --va-ray-o: .1; --va-fall: #22e4ff;
+  --w-bird: #22e4ff; --w-cat: #05040f; --w-cat-rim: #22e4ff; --w-stone: #1c1a44; --w-lamp: #22e4ff;
+}
+[data-scheme="light"] .w-valley.cyber {
+  --va-sky1: #7a6fe0; --va-sky2: #c9a5f2; --va-sky3: #ffd9ec; --va-sun: #fff0fb;
+  --va-c0: #c8b5ee; --va-c1: #f4e9ff; --va-c2: #ffffff;
+  --va-mtf: #b7a8e6; --va-mt1: #7668c0; --va-mt2: #c0b0ee; --va-mt-sh: #54489c; --va-haze: #e6d4fa; --va-ridge: #22c8e8;
+  --va-sl1: #4a4296; --va-sl2: #4f6fae; --va-pine1: #33407e; --va-pine2: #45609e;
+  --va-hill1: #7fb8d8; --va-hill2: #5a86c0; --va-hill-hi: #b6e6f0; --va-mist-o: .6;
+  --va-lake1: #e6d0f6; --va-lake2: #8a86d6; --va-lake3: #3c3a86;
+  --va-rock: #2c2a5c; --va-rock-hi: #575496; --va-rock-lit: #c4bdee; --va-moss: #3f8fae; --va-moss-hi: #7fe0e6;
+  --va-g0: #2a5a86; --va-g1: #3f86ae; --va-g2: #62bcd2; --va-g3: #b6f0f0;
+  --va-b0: #c8408e; --va-b1: #f070b8; --va-b2: #ffa8d8; --va-b3: #fff0fa;
+  --va-trunk: #2a1e4a; --va-trunk-hi: #7a5aa8;
+  --va-roof: #2a2660; --va-roof-edge: #22c8e8; --va-wall: #221e4c; --va-win: #ff5fb8; --va-wood: #141230; --va-stone: #7a78b0;
+  --va-ray-o: .35; --va-fall: #ffffff;
+  --w-cat: #1e1a48; --w-cat-rim: #7fe0e6; --w-stone: #575496; --w-lamp: #ff5fb8;
+}
+
+/* sky and clouds */
+.va-stars { opacity: var(--va-star-o); }
+.va-stars circle { fill: #fff; }
+.va-moon { fill: #f4f1ff; opacity: var(--va-moon-o); }
+.va-wisps path { fill: none; stroke: #fff; stroke-width: 3; stroke-linecap: round; opacity: var(--va-wisp-o); }
+[data-scheme="light"] .va-holo { opacity: .55; }
+.va-clouds { opacity: var(--va-cloud-o); animation: va-cloud 150s ease-in-out infinite alternate; will-change: transform; }
+.w-valley .c0 { fill: var(--va-c0); }
+.w-valley .c1 { fill: var(--va-c1); }
+.w-valley .c2 { fill: var(--va-c2); }
+.va-thin ellipse { fill: var(--va-c2); opacity: .45; }
+
+/* mountains */
+.va-mt-far { fill: var(--va-mtf); }
+.va-mt-sh { fill: var(--va-mt-sh); opacity: .55; }
+.va-mt-sh.deep { opacity: .35; }
+.va-strata { fill: none; stroke: var(--va-mt-sh); stroke-width: 2; stroke-linecap: round; opacity: .3; }
+.va-strata.hi { stroke: var(--va-snow); opacity: .35; }
+.va-snow { fill: var(--va-snow); opacity: .95; }
+.va-snow.soft { opacity: .5; }
+.w-valley.cyber .va-snow { opacity: .3; }
+.w-valley.cyber .va-snow.soft { opacity: .14; }
+[data-scheme="light"] .w-valley.cyber .va-snow { opacity: .9; }
+.va-ridge { fill: none; stroke: var(--va-ridge); stroke-width: 2; stroke-linejoin: round; }
+.va-ridge.glow { stroke-width: 10; opacity: .2; }
+.va-mist ellipse { fill: url(#va-mistg); opacity: var(--va-mist-o); }
+.va-pine { fill: var(--va-pine1); }
+.va-pine.alt { fill: var(--va-pine2); }
+.va-fall-bed { fill: none; stroke: var(--va-fall); stroke-width: 10; stroke-linecap: round; opacity: .45; }
+.va-hill-hi { fill: var(--va-hill-hi); opacity: .6; }
+.va-temple rect { fill: var(--va-wall); }
+.va-temple path { fill: var(--va-roof); }
+.va-bld { fill: #0a0822; }
+.va-bld-win { fill: #22e4ff; opacity: .85; }
+.va-bld-win.alt { fill: #ff3cac; }
+[data-scheme="light"] .va-bld { fill: #4a4296; }
+
+/* blossom and leaves */
+.w-valley .b0 { fill: var(--va-b0); }
+.w-valley .b1 { fill: var(--va-b1); }
+.w-valley .b2 { fill: var(--va-b2); }
+.w-valley .b3 { fill: var(--va-b3); }
+.w-valley .grn .b0 { fill: var(--va-g0); }
+.w-valley .grn .b1 { fill: var(--va-g1); }
+.w-valley .grn .b2 { fill: var(--va-g2); }
+.w-valley .grn .b3 { fill: var(--va-g3); }
+
+/* lake */
+.va-reflect { opacity: var(--va-refl-o); }
+.va-refl-mt { fill: var(--va-mt1); }
+.va-refl-sl { fill: var(--va-sl1); }
+.va-refl-hill { fill: var(--va-hill2); }
+.va-refl-bloom ellipse { fill: url(#va-bloomg); }
+[data-scheme="light"] .va-neon-refl { opacity: .5; }
+.va-streaks rect { fill: #fff; opacity: .16; }
+.va-shoreline { fill: #fff; opacity: .4; }
+
+/* water, sky and shore life */
+.va-twinkle { opacity: var(--va-star-o); }
+.va-twinkle circle { fill: #fff; }
+.va-twinkle g { animation: twinkle 3.5s ease-in-out infinite; }
+.va-fall { animation: va-fall .9s linear infinite; }
+.va-fall rect { fill: var(--va-fall); opacity: .9; }
+.va-fall-foam { fill: #fff; opacity: .7; transform-box: fill-box; transform-origin: center; animation: va-foam 1.6s ease-in-out infinite alternate; }
+.va-flow rect { fill: var(--va-flow); }
+.va-flow.slow { animation: va-flow 50s linear infinite; }
+.va-flow.fast { animation: va-flow 24s linear infinite; }
+.va-drift { animation: va-drift 70s linear infinite; }
+.va-drift ellipse { fill: var(--va-b2); opacity: .9; }
+.va-glints path, .va-glints ellipse { fill: var(--va-glint); }
+.va-glints g { animation: va-glint 2.4s ease-in-out infinite; }
+.va-boat { animation: va-boat 130s ease-in-out infinite alternate; }
+.va-bob { animation: bob 5s ease-in-out infinite; }
+.va-hull { fill: #7a4a2e; }
+.va-hull-hi { fill: #c98b5c; }
+.va-oar { fill: none; stroke: #5e3b26; stroke-width: 2.5; stroke-linecap: round; }
+.va-boat-shade { fill: #0b2238; opacity: .3; }
+[data-scheme="dark"] .va-hull { fill: #2c1d18; }
+[data-scheme="dark"] .va-hull-hi { fill: #5a3c2c; }
+.va-drone circle { fill: #9ff4ff; }
+.va-drone path { stroke: #22e4ff; stroke-width: 1.5; }
+.va-drone.d1 { animation: va-drone-a 38s linear infinite; }
+.va-drone.d2 { animation: va-drone-b 52s linear infinite; }
+.va-beacons circle { fill: #ff3cac; animation: beacon 2.4s steps(1) infinite; }
+
+/* island, pagoda, rocks */
+.va-island-shade path { fill: #06121f; opacity: .26; }
+.va-trunk-s { fill: none; stroke: var(--va-trunk); stroke-linecap: round; }
+.va-rock { fill: var(--va-rock); }
+.va-rock-lit { fill: var(--va-rock-lit); opacity: .26; }
+.va-rock-dark { fill: #000; opacity: .22; }
+.va-rock-shade { fill: #06121f; opacity: .35; }
+.va-moss { fill: var(--va-moss); }
+.va-moss.hi { fill: var(--va-moss-hi); opacity: .85; }
+.va-stone { fill: var(--va-stone); }
+.va-stone.dark { fill: var(--va-rock-hi); }
+.va-wall { fill: var(--va-wall); }
+.va-win { fill: var(--va-win); }
+.va-wood { fill: var(--va-wood); }
+.va-pagoda path.va-wood { fill: none; stroke: var(--va-wood); stroke-width: 2; }
+.va-roof { fill: var(--va-roof); }
+.va-roof-shade { fill: #000; opacity: .35; }
+.va-roof-edge { fill: none; stroke: var(--va-roof-edge); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+.va-roof-edge.glow { display: none; stroke-width: 11; opacity: .22; }
+.w-valley.cyber .va-roof-edge.glow { display: inline; }
+/* soft light behind lit windows and glowing blossom: night and Cyber only */
+.va-win-glow, .va-bloom-glow { opacity: 0; }
+[data-scheme="dark"] .va-win-glow, .w-valley.cyber .va-win-glow { opacity: .8; }
+[data-scheme="dark"] .va-bloom-glow { opacity: .3; }
+[data-scheme="dark"] .w-valley.cyber .va-bloom-glow { opacity: .85; }
+.va-sign { animation: flicker 6s steps(1) infinite; }
+.va-sign rect { fill: #0a0822; stroke: #ff3cac; stroke-width: 2; }
+.va-sign text { fill: #ff8fe0; font: 700 26px sans-serif; text-anchor: middle; }
+.va-sign path { fill: none; stroke: #1c1a44; stroke-width: 4; }
+.va-walker { --wx: 1150px; --wy: 606px; }
+.va-walker .walk-cat { filter: none; }
+
+/* the near bank */
+.va-bank { fill: var(--va-hill2); }
+.va-crack { fill: none; stroke: #000; stroke-width: 2.5; stroke-linecap: round; opacity: .25; }
+.va-daisy { fill: #fff; opacity: .95; }
+[data-scheme="dark"] .va-daisy { opacity: .5; }
+.va-grass { fill: none; stroke: var(--va-moss-hi); stroke-width: 2; stroke-linecap: round; }
+
+/* light and the framing trees */
+.va-rays { opacity: var(--va-ray-o); animation: va-rays 9s ease-in-out infinite alternate; will-change: opacity; }
+.va-rays path { fill: url(#va-ray); }
+.va-trunk { fill: var(--va-trunk); }
+.va-trunk-hi { fill: none; stroke: var(--va-trunk-hi); stroke-width: 6; stroke-linecap: round; opacity: .7; }
+.va-bark { fill: none; stroke: #000; stroke-width: 3; stroke-linecap: round; opacity: .3; }
+.va-branch { fill: none; stroke: var(--va-trunk); stroke-linecap: round; }
+.va-canopy { will-change: transform; }
+.va-canopy-l { transform-origin: 0% 35%; animation: va-sway-l 7s ease-in-out infinite alternate; }
+.va-canopy-r { transform-origin: 100% 0%; animation: va-sway-r 6s ease-in-out infinite alternate; }
+
+/* Tall, narrow screens: the picture sits in the lower two thirds under open sky, the trees
+   hang from the top, and the two banks move apart so the lake stays in view. */
+@media (max-aspect-ratio: 4/5) {
+  .w-valley { inset: auto 0 0 0; height: 68%; }
+  .w-valley.va-canopy { inset: 0 0 auto 0; }
+  .w-valley.va-left { left: -26%; }
+  .w-valley.va-island { left: 20%; }
+}
+
+/* petals: shed from the trees, carried on gusts, and a few close to the eye */
+.winds.wind-fall .wind { top: -6vh !important; left: var(--x); animation-name: petal-fall; }
+.winds.wind-bokeh .wind { width: calc(var(--s) * 3.4); height: calc(var(--s) * 3.4); }
+.winds.va-day .petal { opacity: .95; background: radial-gradient(circle at 30% 30%, #fff, #ffc4d8 45%, #f58fb5); }
+[data-scheme="dark"] .winds.va-day .petal { opacity: .85; background: radial-gradient(circle at 30% 30%, #ffe6ef, #e58fb0 45%, #a8527f); }
+.winds.va-neon .petal { opacity: .95; background: radial-gradient(circle at 30% 30%, #fff, #ff7edb 45%, #ff2e97); box-shadow: 0 0 10px rgba(255, 60, 172, .8); }
+/* out-of-focus petals near the eye: a soft-edged gradient instead of a blur */
+.winds.wind-bokeh .petal { border-radius: 50%; box-shadow: none; opacity: .5; background: radial-gradient(circle, rgba(255, 228, 236, .9) 0, rgba(255, 176, 204, .45) 38%, transparent 68%); }
+.winds.wind-bokeh.va-neon .petal { background: radial-gradient(circle, rgba(255, 200, 240, .9) 0, rgba(255, 60, 172, .4) 38%, transparent 68%); }
+
+@keyframes va-cloud { from { transform: translateX(-50px); } to { transform: translateX(50px); } }
+@keyframes va-fall { from { transform: translateY(0); } to { transform: translateY(80px); } }
+@keyframes va-foam { from { transform: scale(.85); opacity: .5; } to { transform: scale(1.15); opacity: .8; } }
+@keyframes va-flow { from { transform: translateX(0); } to { transform: translateX(-400px); } }
+@keyframes va-drift { from { transform: translateX(0); } to { transform: translateX(-600px); } }
+@keyframes va-glint { 0%, 100% { opacity: 0; } 50% { opacity: 1; } }
+@keyframes va-boat { from { transform: translate(570px, 716px); } to { transform: translate(950px, 724px); } }
+@keyframes va-drone-a { from { transform: translate(-100px, 260px); } to { transform: translate(1700px, 170px); } }
+@keyframes va-drone-b { from { transform: translate(1700px, 350px); } to { transform: translate(-100px, 300px); } }
+@keyframes va-rays { from { opacity: calc(var(--va-ray-o) * .55); } to { opacity: var(--va-ray-o); } }
+@keyframes va-sway-l { from { transform: rotate(-.5deg); } to { transform: rotate(.8deg) translateY(3px); } }
+@keyframes va-sway-r { from { transform: rotate(.6deg); } to { transform: rotate(-.8deg) translateY(4px); } }
+@keyframes petal-fall {
+  0% { transform: translate(0, 0) rotate(0deg); }
+  25% { transform: translate(7vw, 28vh) rotate(140deg); }
+  50% { transform: translate(3vw, 56vh) rotate(260deg); }
+  75% { transform: translate(11vw, 84vh) rotate(400deg); }
+  100% { transform: translate(8vw, 114vh) rotate(540deg); }
+}
 
 /* --- your own picture --- */
 .wallpaper {
@@ -1303,8 +1482,6 @@ a.btn { text-decoration: none; color: var(--text); }
   50% { transform: translate3d(40px, 50vh, 0) rotate(180deg); }
   100% { transform: translate3d(-20px, 105vh, 0) rotate(360deg); }
 }
-@keyframes grid-move { to { background-position: 0 48px, 0 0; } }
-@keyframes drift { to { transform: translate(4%, -3%) scale(1.05); } }
 
 /* ==========================================================================
    Phones & small tablets

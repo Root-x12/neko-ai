@@ -4,7 +4,7 @@
 
 use std::fmt::Write;
 
-fn rnd(seed: u32) -> f64 {
+pub(super) fn rnd(seed: u32) -> f64 {
     let mut x = seed.wrapping_mul(2_654_435_761).wrapping_add(0x9e37_79b9);
     x ^= x >> 15;
     x = x.wrapping_mul(0x2c1b_3c6d);
@@ -93,7 +93,7 @@ pub fn birds(seed: u32, n: u32, y: f64) -> String {
 }
 
 /// A sitting cat seen from behind (origin at its feet), optionally with a scarf in the wind.
-fn sitting_cat(x: f64, y: f64, scale: f64, scarf: bool) -> String {
+pub(super) fn sitting_cat(x: f64, y: f64, scale: f64, scarf: bool) -> String {
     let scarf_svg = if scarf {
         r##"<path class="w-scarf" d="M-15 -52 Q 0 -44 15 -52 L 14 -46 Q 0 -38 -14 -46 Z"/>
            <path class="w-scarf w-scarf-tail" d="M12 -50 C 30 -54 44 -46 60 -54 C 52 -44 36 -40 14 -44 Z"/>"##
@@ -146,7 +146,7 @@ fn torii(x: f64, y: f64, w: f64, h: f64) -> String {
     )
 }
 
-fn lantern(x: f64, y: f64, s: f64) -> String {
+pub(super) fn lantern(x: f64, y: f64, s: f64) -> String {
     format!(
         r##"<g class="w-toro" transform="translate({x:.0} {y:.0}) scale({s:.2})">
   <rect x="-14" y="-6" width="28" height="6" rx="2"/><rect x="-5" y="-40" width="10" height="34"/>
