@@ -12,6 +12,7 @@ pub mod error;
 pub mod guard;
 pub mod library;
 pub mod llm;
+pub mod skills;
 pub mod tools;
 pub mod uploads;
 
@@ -43,6 +44,7 @@ pub struct Inner {
     pub vault: crypto::Vault,
     pub http: reqwest::Client,
     pub mcp: tools::mcp::McpManager,
+    pub skills: skills::SkillRunner,
     /// Required for the first sign-up; `None` once an account exists.
     pub setup_code: Mutex<Option<String>>,
     /// username -> (failed attempts, time of last failure)
@@ -65,6 +67,7 @@ impl AppState {
                 vault,
                 http: llm::http_client(),
                 mcp: tools::mcp::McpManager::default(),
+                skills: skills::SkillRunner::default(),
                 setup_code: Mutex::new(setup_code),
                 login_failures: Mutex::new(HashMap::new()),
             }),

@@ -1000,3 +1000,36 @@ async fn theme_wallpapers() {
     assert_eq!(c.req(M::DELETE, "/wallpapers/sakura").send().await.unwrap().status(), 204);
     assert_eq!(c.req(M::GET, "/wallpapers/sakura").send().await.unwrap().status(), 404);
 }
+
+#[tokio::test]
+async fn skills_import_is_admin_only_and_github_only() {
+    use reqwest::Method as M;
+    let (mut admin, code, _) = start_app_with(|cfg| cfg.allow_signup = true).await;
+    assert_eq!(register(&mut admin, "admin", Some(&code)).await, 200);
+
+    // A fresh admin has no skills.
+    let (st, list) = admin.json::<Vec<Skill>>(M::GET, "/skills", json!(null)).await;
+    assert_eq!(st, 200);
+    assert!(list.unwrap().is_empty());
+
+    // The admin passes the gate but non-GitHub / malformed URLs are refused before any clone.
+    for bad in ["https://gitlab.com/owner/repo", "git@github.com:o/r.git", "https://github.com/owner", "file:///etc"] {
+        let (st, _) = admin.json::<Value>(M::POST, "/skills", json!({ "repo_url": bad })).await;
+        assert_eq!(st, 400, "{bad} should be rejected");
+    }
+
+    // A regular (non-admin) user cannot import, run, or manage skills.
+    let mut bob = Client { base: admin.base.clone(), http: reqwest::Client::new(), cookie: None };
+    assert_eq!(register(&mut bob, "bob", None).await, 200);
+    let (st, _) =
+        bob.json::<Value>(M::POST, "/skills", json!({ "repo_url": "https://github.com/Autumn-27/ScopeSentry" })).await;
+    assert_eq!(st, 403);
+    assert_eq!(bob.req(M::POST, "/skills/1/run").send().await.unwrap().status(), 403);
+
+    // Lifecycle actions on a missing skill are 404 for the admin.
+    assert_eq!(admin.req(M::POST, "/skills/999/run").send().await.unwrap().status(), 404);
+    assert_eq!(admin.req(M::POST, "/skills/999/stop").send().await.unwrap().status(), 404);
+    assert_eq!(admin.req(M::DELETE, "/skills/999").send().await.unwrap().status(), 404);
+    let (st, _) = admin.json::<Value>(M::PATCH, "/skills/999", json!({ "enabled": true })).await;
+    assert_eq!(st, 404);
+}

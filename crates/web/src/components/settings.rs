@@ -29,6 +29,9 @@ pub fn SettingsModal() -> impl IntoView {
                     {tab_btn(SettingsTab::Appearance, "Appearance", icons::PALETTE)}
                     {tab_btn(SettingsTab::Providers, "Providers", icons::KEY)}
                     {tab_btn(SettingsTab::Tools, "Tools", icons::WRENCH)}
+                    <Show when=move || ctx.user.with(|u| u.role == Role::Admin)>
+                        {tab_btn(SettingsTab::Skills, "Skills", icons::TERMINAL)}
+                    </Show>
                     {tab_btn(SettingsTab::Memory, "Memory", icons::BRAIN)}
                     {tab_btn(SettingsTab::Knowledge, "My files", icons::BOOK)}
                     {tab_btn(SettingsTab::Devices, "Devices", icons::DEVICE)}
@@ -45,6 +48,7 @@ pub fn SettingsModal() -> impl IntoView {
                         Some(SettingsTab::Appearance) => view! { <Appearance /> }.into_any(),
                         Some(SettingsTab::Providers) => view! { <Providers /> }.into_any(),
                         Some(SettingsTab::Tools) => view! { <Tools /> }.into_any(),
+                        Some(SettingsTab::Skills) => view! { <crate::components::skills::SkillsTab /> }.into_any(),
                         Some(SettingsTab::Memory) => view! { <crate::components::library::MemoryTab /> }.into_any(),
                         Some(SettingsTab::Knowledge) => view! { <crate::components::library::KnowledgeTab /> }.into_any(),
                         Some(SettingsTab::Admin) => view! { <crate::components::admin::AdminPanel /> }.into_any(),

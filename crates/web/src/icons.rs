@@ -83,3 +83,6 @@ pub fn Icon(#[prop(into)] svg: &'static str, #[prop(optional)] size: Option<u32>
         ></svg>
     }
 }
+
+/// A terminal prompt — used for the cyber "Skills" (agent integrations) tab.
+pub const TERMINAL: &str = svg(r#"<rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3M13 15h4"/>"#);
