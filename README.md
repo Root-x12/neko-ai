@@ -23,6 +23,7 @@ Each mode has a light and a dark version. There's an animated cat mascot that bl
 | **Devices** | Address and QR code to open on your phone, list of signed-in devices, remote sign-out, installable as an app |
 | **Tools** | Web search (DuckDuckGo with no key, SearXNG, Brave, Tavily) and page reading, switched on per chat. The AI calls them by itself and each call shows as an expandable card |
 | **MCP** | Plug in any MCP server: remote over Streamable HTTP (with encrypted auth headers) or a local command over stdio (admin only) |
+| **Skills** | Bring a GitHub-hosted security tool (e.g. ScopeSentry) in as a cyber "agent": Neko clones the repo, shows you its declared setup/run commands, runs it under supervision with captured logs, and wires its HTTP/MCP endpoint and playbook into chats. Admin only (see [Skills](#skills-cyber-agent-integrations)) |
 | **Files** | Attach images, PDFs and text/code files by clicking, pasting or dragging. Images and PDFs go to the model natively where the provider supports it, otherwise as extracted text |
 | **Canvas** | HTML, SVG, Mermaid diagrams and React components from the chat render in a side panel, with preview and code views, a switcher between artifacts, and download. Previews run in a sandboxed frame with no network or cookie access, using local copies of React, Tailwind, Babel and Mermaid |
 | **Guard** | Every message (and attached file text) is scanned for API keys, private keys, tokens, passwords, connection strings, emails, card numbers (Luhn-checked), SSNs, IBANs and phone numbers before it leaves the server. Depending on workspace policy it warns (send anyway / redact & send), redacts automatically, or blocks |
@@ -110,6 +111,36 @@ cd crates/web && trunk serve                            # UI with hot reload on 
 
 - **Remote:** paste the server URL (for example `https://mcp.example.com/mcp`) and any auth header, such as `Authorization: Bearer …`.
 - **Local (admin only):** command `npx`, with the arguments `-y`, `@modelcontextprotocol/server-filesystem` and `/path/to/folder`, one per line.
+
+### Skills (cyber agent integrations)
+
+A **skill** wraps a GitHub-hosted security tool as a cyber agent. In **Settings → Skills** (admin
+only) paste a repo URL and Neko clones it under `<data>/skills/`. Importing only clones — nothing
+runs until you press **Run**, so you can review the setup and run commands first. Once running, the
+tool is reached over its HTTP/MCP endpoint and its playbook is added to the system prompt; tick
+**Active in chats** to use it.
+
+Neko reads an optional `neko-skill.json` at the repo root (it synthesises a blank one you can edit
+if the repo has none):
+
+```json
+{
+  "name": "ScopeSentry",
+  "mode": "cyber",
+  "instructions": "How the assistant should drive this tool. Added to the system prompt.",
+  "setup": "docker compose pull",
+  "run": "docker compose up",
+  "endpoint": "http://127.0.0.1:8787",
+  "mcp_path": "/mcp",
+  "env_names": ["SCOPE_API_KEY"]
+}
+```
+
+`setup` runs once before `run`; `run` stays up under supervision with its output captured. If
+`mcp_path` is set, the endpoint's MCP tools are offered to the model automatically; otherwise the
+playbook tells the model how to use the tool. Cloning and running happen on your server, which is
+why skills are admin-only — the same bar as local-command MCP servers. Only `https://github.com/…`
+URLs are accepted, and clones are removed when the skill is deleted.
 
 ```
 crates/

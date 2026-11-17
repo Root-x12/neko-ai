@@ -92,6 +92,7 @@ fn Main(user: User, on_signed_out: Callback<()>) -> impl IntoView {
     ctx.load_providers();
     ctx.load_conversations();
     ctx.load_mcp_servers();
+    ctx.load_skills();
     ctx.load_info();
     spawn_local(async move {
         if let Ok(list) = api::get::<Vec<neko_shared::Wallpaper>>("/wallpapers").await {

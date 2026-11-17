@@ -9,8 +9,8 @@ use std::{
 use neko_shared::{
     AdminUser, Attachment, AttachmentKind, AuditEntry, ChatParams, Conversation, ConversationSummary, DeviceSession,
     Document, GuardPolicy, KnowledgeHit, McpServer, McpTransport, Memory, MemorySettings, Message, MsgRole, Provider,
-    ProviderKind, Role, SearchBackend, SearchHit, SearchSettings, ToolCall, UpdateUser, User, Wallpaper, Workspace,
-    WorkspaceInput,
+    ProviderKind, Role, SearchBackend, SearchHit, SearchSettings, Skill, SkillManifest, SkillStatus, ToolCall,
+    UpdateUser, User, Wallpaper, Workspace, WorkspaceInput,
 };
 use rusqlite::{params, Connection, OptionalExtension, Row};
 
@@ -205,6 +205,22 @@ CREATE TABLE wallpapers (
     mime       TEXT NOT NULL,
     updated_at INTEGER NOT NULL,
     PRIMARY KEY (user_id, slot)
+);
+"#,
+    r#"
+CREATE TABLE skills (
+    id         INTEGER PRIMARY KEY,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name       TEXT NOT NULL,
+    repo_url   TEXT NOT NULL,
+    git_ref    TEXT NOT NULL DEFAULT '',
+    dir        TEXT NOT NULL,
+    manifest   TEXT NOT NULL,
+    status     TEXT NOT NULL DEFAULT 'imported',
+    enabled    INTEGER NOT NULL DEFAULT 0,
+    env_blob   BLOB,
+    env_names  TEXT NOT NULL DEFAULT '[]',
+    created_at INTEGER NOT NULL
 );
 "#,
 ];
@@ -1302,6 +1318,133 @@ pub fn delete_wallpaper(c: &Connection, user_id: i64, slot: &str) -> DbResult<Op
     let old = get_wallpaper(c, user_id, slot)?.map(|(p, _)| p);
     c.execute("DELETE FROM wallpapers WHERE user_id = ?1 AND slot = ?2", params![user_id, slot])?;
     Ok(old)
+}
+
+// ---------- skills (cyber agent integrations) ----------
+
+/// A skill row, including the server-only clone directory and encrypted env values.
+#[derive(Clone)]
+pub struct SkillRecord {
+    pub skill: Skill,
+    pub dir: String,
+    env_blob: Option<Vec<u8>>,
+}
+
+impl SkillRecord {
+    /// Decrypts the stored env var values (name -> value).
+    pub fn env(&self, vault: &crate::crypto::Vault) -> Vec<(String, String)> {
+        let Some(blob) = &self.env_blob else { return Vec::new() };
+        vault.decrypt(blob).ok().and_then(|j| serde_json::from_str(&j).ok()).unwrap_or_default()
+    }
+}
+
+fn skill_from_row(r: &Row) -> DbResult<SkillRecord> {
+    let manifest: SkillManifest = serde_json::from_str(&r.get::<_, String>(6)?).unwrap_or_default();
+    let endpoint = manifest.endpoint.clone();
+    let env_names: Vec<String> = serde_json::from_str(&r.get::<_, String>(10)?).unwrap_or_default();
+    Ok(SkillRecord {
+        skill: Skill {
+            id: r.get(0)?,
+            name: r.get(2)?,
+            repo_url: r.get(3)?,
+            git_ref: r.get(4)?,
+            manifest,
+            status: SkillStatus::parse(&r.get::<_, String>(7)?),
+            endpoint,
+            enabled: r.get::<_, i64>(8)? != 0,
+            env_set: env_names,
+            created_at: r.get(11)?,
+        },
+        dir: r.get(5)?,
+        env_blob: r.get(9)?,
+    })
+}
+
+const SKILL_COLS: &str =
+    "id, user_id, name, repo_url, git_ref, dir, manifest, status, enabled, env_blob, env_names, created_at";
+
+pub fn list_skills(c: &Connection, user_id: i64) -> DbResult<Vec<Skill>> {
+    let mut st = c.prepare(&format!("SELECT {SKILL_COLS} FROM skills WHERE user_id = ?1 ORDER BY created_at"))?;
+    let rows = st.query_map([user_id], skill_from_row)?;
+    rows.map(|r| r.map(|rec| rec.skill)).collect()
+}
+
+pub fn get_skill(c: &Connection, user_id: i64, id: i64) -> DbResult<Option<SkillRecord>> {
+    c.query_row(
+        &format!("SELECT {SKILL_COLS} FROM skills WHERE user_id = ?1 AND id = ?2"),
+        params![user_id, id],
+        skill_from_row,
+    )
+    .optional()
+}
+
+/// Enabled skills that are up — the ones wired into a chat.
+pub fn active_skills(c: &Connection, user_id: i64) -> DbResult<Vec<SkillRecord>> {
+    let mut st = c.prepare(&format!(
+        "SELECT {SKILL_COLS} FROM skills WHERE user_id = ?1 AND enabled = 1 AND status = 'running' ORDER BY created_at"
+    ))?;
+    let rows = st.query_map([user_id], skill_from_row)?;
+    rows.collect()
+}
+
+pub fn insert_skill(
+    c: &Connection,
+    user_id: i64,
+    name: &str,
+    repo_url: &str,
+    git_ref: &str,
+    dir: &str,
+    manifest: &SkillManifest,
+) -> DbResult<i64> {
+    let json = serde_json::to_string(manifest).unwrap_or_else(|_| "{}".into());
+    c.execute(
+        "INSERT INTO skills (user_id, name, repo_url, git_ref, dir, manifest, status, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'imported', ?7)",
+        params![user_id, name, repo_url, git_ref, dir, json, now()],
+    )?;
+    Ok(c.last_insert_rowid())
+}
+
+pub fn set_skill_manifest(c: &Connection, user_id: i64, id: i64, manifest: &SkillManifest) -> DbResult<bool> {
+    let json = serde_json::to_string(manifest).unwrap_or_else(|_| "{}".into());
+    let n = c.execute("UPDATE skills SET manifest = ?3 WHERE user_id = ?1 AND id = ?2", params![user_id, id, json])?;
+    Ok(n > 0)
+}
+
+pub fn set_skill_status(c: &Connection, user_id: i64, id: i64, status: SkillStatus) -> DbResult<bool> {
+    let n = c.execute(
+        "UPDATE skills SET status = ?3 WHERE user_id = ?1 AND id = ?2",
+        params![user_id, id, status.as_str()],
+    )?;
+    Ok(n > 0)
+}
+
+pub fn set_skill_enabled(c: &Connection, user_id: i64, id: i64, enabled: bool) -> DbResult<bool> {
+    let n = c.execute(
+        "UPDATE skills SET enabled = ?3 WHERE user_id = ?1 AND id = ?2",
+        params![user_id, id, enabled as i64],
+    )?;
+    Ok(n > 0)
+}
+
+pub fn set_skill_env(c: &Connection, user_id: i64, id: i64, blob: Vec<u8>, names: &[String]) -> DbResult<bool> {
+    let names_json = serde_json::to_string(names).unwrap_or_else(|_| "[]".into());
+    let n = c.execute(
+        "UPDATE skills SET env_blob = ?3, env_names = ?4 WHERE user_id = ?1 AND id = ?2",
+        params![user_id, id, blob, names_json],
+    )?;
+    Ok(n > 0)
+}
+
+/// Deletes a skill, returning its clone directory so the caller can remove it from disk.
+pub fn delete_skill(c: &Connection, user_id: i64, id: i64) -> DbResult<Option<String>> {
+    let dir: Option<String> = c
+        .query_row("SELECT dir FROM skills WHERE user_id = ?1 AND id = ?2", params![user_id, id], |r| r.get(0))
+        .optional()?;
+    if dir.is_some() {
+        c.execute("DELETE FROM skills WHERE user_id = ?1 AND id = ?2", params![user_id, id])?;
+    }
+    Ok(dir)
 }
 
 // ---------- knowledge library ----------

@@ -50,6 +50,7 @@ pub fn routes() -> Router<AppState> {
         .route("/devices/revoke-others", post(revoke_other_devices))
         .merge(crate::admin::routes())
         .merge(crate::library::routes())
+        .merge(crate::skills::routes())
         .fallback(|| async { AppError::not_found("API route") })
 }
 

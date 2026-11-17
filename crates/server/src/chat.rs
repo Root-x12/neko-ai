@@ -353,22 +353,30 @@ async fn generate(
 
     let mut turns = history_turns(&s, &history, &files, ws.injection_scan).await;
     let uid = user.id;
-    let (mem_settings, memories) =
-        s.db.call(move |c| Ok((db::memory_settings(c, uid)?, db::list_memories(c, uid)?))).await?;
-    let (toolbox, warnings) = if tool_sel == ToolSelection::default() && !mem_settings.auto_save {
+    let (mem_settings, memories, active_skills) =
+        s.db.call(move |c| Ok((db::memory_settings(c, uid)?, db::list_memories(c, uid)?, db::active_skills(c, uid)?)))
+            .await?;
+    let (toolbox, warnings) = if tool_sel == ToolSelection::default()
+        && !mem_settings.auto_save
+        && active_skills.is_empty()
+    {
         (Toolbox::empty(), Vec::new())
     } else {
-        Toolbox::build(&s, &user, &tool_sel, mem_settings.enabled && mem_settings.auto_save, conv_id).await
+        Toolbox::build(&s, &user, &tool_sel, mem_settings.enabled && mem_settings.auto_save, conv_id, &active_skills)
+            .await
     };
-    // Memories go into the request's system prompt only; the chat's own prompt is stored unchanged.
+    // Memories and active-skill playbooks go into the request's system prompt only; the chat's
+    // own stored prompt is unchanged.
     let mut params = params;
+    let prepend = |prompt: &mut String, block: String| {
+        *prompt = if prompt.trim().is_empty() { block } else { format!("{block}\n{prompt}") };
+    };
+    if let Some(block) = crate::skills::playbook_prompt(&active_skills) {
+        prepend(&mut params.system_prompt, block);
+    }
     if mem_settings.enabled {
         if let Some(block) = crate::library::memory_prompt(&memories) {
-            params.system_prompt = if params.system_prompt.trim().is_empty() {
-                block
-            } else {
-                format!("{block}\n{}", params.system_prompt)
-            };
+            prepend(&mut params.system_prompt, block);
         }
     }
 

@@ -791,3 +791,130 @@ pub struct Wallpaper {
     pub slot: String,
     pub updated_at: i64,
 }
+
+// ---------- skills (cyber agent integrations) ----------
+
+/// Where a skill is in its lifecycle on the server.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillStatus {
+    /// Cloned, not set up or run yet.
+    Imported,
+    /// The setup command is running.
+    Installing,
+    /// Setup finished; ready to run.
+    Ready,
+    /// The run command is up.
+    Running,
+    /// Setup or run failed; see the log.
+    Failed,
+    /// Stopped by the user.
+    Stopped,
+}
+
+impl SkillStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SkillStatus::Imported => "imported",
+            SkillStatus::Installing => "installing",
+            SkillStatus::Ready => "ready",
+            SkillStatus::Running => "running",
+            SkillStatus::Failed => "failed",
+            SkillStatus::Stopped => "stopped",
+        }
+    }
+
+    pub fn parse(s: &str) -> SkillStatus {
+        match s {
+            "installing" => SkillStatus::Installing,
+            "ready" => SkillStatus::Ready,
+            "running" => SkillStatus::Running,
+            "failed" => SkillStatus::Failed,
+            "stopped" => SkillStatus::Stopped,
+            _ => SkillStatus::Imported,
+        }
+    }
+}
+
+/// A skill's `neko-skill.json` manifest: how to set the tool up, run it, reach it, and drive it.
+/// Everything here is reviewed by the admin before anything executes.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SkillManifest {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    /// "neko", "cyber", or "any" (default). Controls where it shows and its accent.
+    #[serde(default)]
+    pub mode: String,
+    #[serde(default)]
+    pub icon: String,
+    /// The playbook: how the assistant should use this tool. Injected into the system prompt.
+    #[serde(default)]
+    pub instructions: String,
+    /// Shell command run once to install/build the tool (reviewed before it runs).
+    #[serde(default)]
+    pub setup: String,
+    /// Shell command that starts the tool and keeps it up.
+    #[serde(default)]
+    pub run: String,
+    /// The HTTP base URL the tool serves once running (e.g. http://127.0.0.1:8787).
+    #[serde(default)]
+    pub endpoint: String,
+    /// If the tool speaks MCP, the path to its MCP endpoint relative to `endpoint` (e.g. /mcp).
+    #[serde(default)]
+    pub mcp_path: String,
+    /// Names of environment variables the tool needs (values are entered on the server, never shipped).
+    #[serde(default)]
+    pub env_names: Vec<String>,
+}
+
+/// A skill as shown to the client. Secrets and absolute paths stay on the server.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Skill {
+    pub id: i64,
+    pub name: String,
+    pub repo_url: String,
+    /// Branch, tag or commit that was cloned (empty = default branch).
+    pub git_ref: String,
+    pub manifest: SkillManifest,
+    pub status: SkillStatus,
+    /// The effective HTTP endpoint (manifest endpoint, possibly overridden).
+    pub endpoint: String,
+    /// True once the skill is wired into chats (playbook + tools active).
+    pub enabled: bool,
+    /// Names of env vars whose values are stored on the server.
+    pub env_set: Vec<String>,
+    pub created_at: i64,
+}
+
+/// Import a skill by cloning a GitHub repository. Admin only.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillImport {
+    /// A GitHub repo URL: https://github.com/<owner>/<repo>.
+    pub repo_url: String,
+    /// Branch, tag or commit to check out. Empty = default branch.
+    #[serde(default)]
+    pub git_ref: String,
+}
+
+/// Edit a skill after import: tweak the playbook, endpoint, enable it, or set env values.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SkillPatch {
+    #[serde(default)]
+    pub instructions: Option<String>,
+    #[serde(default)]
+    pub endpoint: Option<String>,
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    /// Replace env var values (name -> value). `None` keeps what's stored.
+    #[serde(default)]
+    pub env: Option<Vec<(String, String)>>,
+}
+
+/// A slice of a skill process's captured output.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillLog {
+    pub status: SkillStatus,
+    pub lines: Vec<String>,
+}

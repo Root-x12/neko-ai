@@ -13,6 +13,7 @@ pub enum SettingsTab {
     Appearance,
     Providers,
     Tools,
+    Skills,
     Memory,
     Knowledge,
     Admin,
@@ -122,6 +123,7 @@ pub struct Ctx {
     pub pending: RwSignal<Vec<PendingFile>>,
     pub tools: RwSignal<ToolSelection>,
     pub mcp_servers: RwSignal<Vec<McpServer>>,
+    pub skills: RwSignal<Vec<Skill>>,
     pub canvas: RwSignal<Option<CanvasItem>>,
     /// Show the code instead of the preview.
     pub canvas_code: RwSignal<bool>,
@@ -165,6 +167,7 @@ impl Ctx {
                 theme::load_pref(TOOLS_KEY).and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default(),
             ),
             mcp_servers: RwSignal::new(Vec::new()),
+            skills: RwSignal::new(Vec::new()),
             canvas: RwSignal::new(None),
             canvas_code: RwSignal::new(false),
             canvas_full: RwSignal::new(false),
@@ -733,6 +736,14 @@ impl Ctx {
         if let Ok(json) = serde_json::to_string(&self.tools.get_untracked()) {
             theme::save_pref(TOOLS_KEY, &json);
         }
+    }
+
+    pub fn load_skills(self) {
+        spawn_local(async move {
+            if let Ok(list) = api::get::<Vec<Skill>>("/skills").await {
+                self.skills.set(list);
+            }
+        });
     }
 
     pub fn load_mcp_servers(self) {

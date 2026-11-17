@@ -50,6 +50,7 @@ impl Toolbox {
         sel: &ToolSelection,
         remember: bool,
         conversation_id: i64,
+        skills: &[db::SkillRecord],
     ) -> (Self, Vec<(String, String)>) {
         let mut tb = Self::empty();
         tb.user_id = user.id;
@@ -161,6 +162,40 @@ impl Toolbox {
                     }
                     Err(e) => warnings.push((name, e)),
                 }
+            }
+        }
+        // Active skills that expose an MCP endpoint contribute their tools too.
+        for rec in skills {
+            let m = &rec.skill.manifest;
+            if m.endpoint.trim().is_empty() || m.mcp_path.trim().is_empty() {
+                continue;
+            }
+            let url = format!("{}{}", m.endpoint.trim_end_matches('/'), m.mcp_path);
+            let config = mcp::McpConfig {
+                id: crate::skills::SKILL_MCP_BASE + rec.skill.id,
+                name: rec.skill.name.clone(),
+                transport: McpTransport::Http,
+                url,
+                headers: Vec::new(),
+                command: String::new(),
+                args: Vec::new(),
+                env: Vec::new(),
+            };
+            match s.mcp.list_tools(&s.http, &config).await {
+                Ok(tools) => {
+                    for t in tools {
+                        let alias = mcp::tool_alias(config.id, &t.name);
+                        let desc = web::truncate(&format!("[{}] {}", config.name, t.description.trim()), 1000);
+                        tb.add(
+                            &alias,
+                            &format!("{} › {}", config.name, t.name),
+                            &desc,
+                            mcp::clean_schema(t.input_schema),
+                            Exec::Mcp { config: Box::new(config.clone()), tool: t.name },
+                        );
+                    }
+                }
+                Err(e) => warnings.push((rec.skill.name.clone(), e)),
             }
         }
         (tb, warnings)
